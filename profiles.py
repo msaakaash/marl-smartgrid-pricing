@@ -1,18 +1,20 @@
-DEFAULT_PROFILE_TEMPLATE = {
-    "type": "residential",
-    "flexibility": 0.5,
-    "priority": 3,
-    "willingness_to_shift": 0.5,
-    "emergency_status": 0,
-}
+import numpy as np
 
-def normalize_profile(profile: dict):
-    """Convert profile dict into a normalized feature vector."""
-    type_code = 0 if profile["type"] == "residential" else 1
-    return [
-        type_code,
-        float(profile["flexibility"]),
-        profile["priority"] / 5.0,
-        float(profile["willingness_to_shift"]),
-        float(profile["emergency_status"]),
-    ]
+class ConsumerProfile:
+    """Represents a consumer's profile with key attributes."""
+    def __init__(self, building_id, flexibility, willingness):
+        self.id = building_id
+        # Represents how much the consumer can shift their load (0.0 to 1.0)
+        self.flexibility = flexibility
+        # Represents the consumer's willingness to participate in DR (0.0 to 1.0)
+        self.willingness = willingness
+
+def generate_profiles(num_consumers):
+    """Generates a list of random consumer profiles."""
+    profiles = []
+    for i in range(num_consumers):
+        # Generate random values for flexibility and willingness
+        flexibility = np.random.uniform(0.1, 0.9)
+        willingness = np.random.uniform(0.1, 0.9)
+        profiles.append(ConsumerProfile(i, flexibility, willingness))
+    return profiles

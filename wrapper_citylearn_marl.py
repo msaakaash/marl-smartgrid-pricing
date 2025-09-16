@@ -1,143 +1,71 @@
-import numpy as np
-import random
-import copy
-from gymnasium import spaces
-from pettingzoo.utils.env import ParallelEnv
 from citylearn.citylearn import CityLearnEnv
+import numpy as np
+import os
+from profiles import generate_profiles
+from rewards import calculate_consumer_reward, calculate_grid_reward
 
-from profiles import DEFAULT_PROFILE_TEMPLATE, normalize_profile
-from rewards import consumer_reward, aggregator_reward, grid_reward
+class MARLWrapper:
+    def __init__(self):
+        # Using a dummy CityLearn dataset for the prototype
+        # The folder 'citylearn_challenge_2022_phase_1' should exist inside the citylearn package folder
+        data_path = "citylearn_challenge_2022_phase_1"
+        self.env = CityLearnEnv(data_path)
+        
+        # Dynamically get the number of buildings from the environment
+        self.num_consumers = len(self.env.buildings)
+        
+        # Generate profiles for all consumers
+        self.consumer_profiles = generate_profiles(self.num_consumers)
+        self.state = self.env.reset()
+        self.total_consumption = 0
+        self.step_count = 0
 
+    def step(self):
+        # Prototype of the three-layer agent interaction
 
-class CityLearnParallelEnv(ParallelEnv):
-    metadata = {"render_modes": []}
+        # 1. Grid Controller observes the environment and decides on DR signals
+        aggregated_demand = np.sum(self.state[0])
+        dr_signal_type = "hybrid" if aggregated_demand > 20 else "none"
 
-    def __init__(self, schema_path: str, n_consumers: int = 5):
-        self.env = CityLearnEnv(schema=schema_path)
-        self.n_consumers = n_consumers
-        self.agents = [f"consumer_{i}" for i in range(n_consumers)] + ["aggregator", "grid"]
+        # 2. Aggregator Agents (simulated) process the signal and decide on prices/incentives
+        custom_dr_offers = {}
+        for profile in self.consumer_profiles:
+            if dr_signal_type == "hybrid":
+                # A simple rule for the prototype
+                price_signal = 0.5 + (0.5 * profile.flexibility)
+                incentive = 1.0 - profile.willingness
+                custom_dr_offers[profile.id] = (price_signal, incentive)
+            else:
+                custom_dr_offers[profile.id] = (0, 0)
 
-        # spaces (rough estimates, update dynamically in reset)
-        obs_dim = 10
-        self.observation_spaces = {a: spaces.Box(-np.inf, np.inf, (obs_dim,), dtype=np.float32) for a in self.agents}
-        self.action_spaces = {
-            **{f"consumer_{i}": spaces.Box(-1.0, 1.0, (1,), dtype=np.float32) for i in range(n_consumers)},
-            "aggregator": spaces.Box(low=np.array([0.0, 0.0]), high=np.array([1.0, 10.0]), dtype=np.float32),
-            "grid": spaces.Box(low=np.array([0.5]), high=np.array([2.0]), dtype=np.float32),
-        }
+        # 3. Consumer Agents take actions based on the custom offers and their profiles
+        actions = []
+        for profile in self.consumer_profiles:
+            price_signal, incentive = custom_dr_offers[profile.id]
+            # Simplified agent logic for the prototype
+            action = -1 * (price_signal + incentive) * profile.willingness
+            # WRAP THE ACTION IN A LIST
+            actions.append([action]) 
+        
+        # The wrapper passes these actions to the CityLearn environment
+        next_state, old_cost, _, _ = self.env.step(np.array(actions))
+        new_state, new_cost, _, _ = self.env.step(np.array(actions))
+        
+        # Calculate rewards for agents
+        consumer_rewards = [calculate_consumer_reward(old_cost[i], new_cost[i], 1.0) for i in range(self.num_consumers)]
+        
+        # Calculate grid reward based on total demand reduction
+        old_peak_demand = np.sum(old_cost)
+        new_peak_demand = np.sum(new_cost)
+        grid_reward = calculate_grid_reward(old_peak_demand, new_peak_demand)
+        
+        self.state = next_state
+        self.step_count += 1
+        
+        return new_state, consumer_rewards, grid_reward, dr_signal_type, new_peak_demand
 
-        self.profiles = []
-        self.current_price = 0.5
-        self.current_grid_limit = 5.0
-        self.last_incentive_budget = 0.0
-
-    def _init_profiles(self, seed=None):
-        rng = np.random.RandomState(seed)
-        self.profiles = []
-        for i in range(self.n_consumers):
-            p = copy.deepcopy(DEFAULT_PROFILE_TEMPLATE)
-            p["type"] = "commercial" if rng.rand() < 0.3 else "residential"
-            p["flexibility"] = float(max(0.05, min(1.0, rng.normal(0.5, 0.15))))
-            p["priority"] = int(rng.randint(1, 5))
-            p["willingness_to_shift"] = float(rng.rand())
-            p["emergency_status"] = 0
-            self.profiles.append(p)
-
-    def _update_dynamic_profiles(self, incentives, comfort_devs=None,
-                                 emergency_prob=0.01, emergency_clear_prob=0.2,
-                                 willingness_gain=0.05, willingness_decay=0.995,
-                                 flex_jitter=0.05):
-        if comfort_devs is None:
-            comfort_devs = [0.0] * self.n_consumers
-
-        for i, prof in enumerate(self.profiles):
-            if random.random() < emergency_prob:
-                prof["emergency_status"] = 1
-            elif prof["emergency_status"] == 1 and random.random() < emergency_clear_prob:
-                prof["emergency_status"] = 0
-
-            prof["willingness_to_shift"] = prof["willingness_to_shift"] * willingness_decay + willingness_gain * incentives[i]
-            if comfort_devs[i] > 0.1:
-                prof["willingness_to_shift"] *= 0.9
-            prof["willingness_to_shift"] = float(np.clip(prof["willingness_to_shift"], 0.0, 1.0))
-
-            base = prof["flexibility"]
-            jitter = np.random.uniform(-flex_jitter, flex_jitter)
-            prof["flexibility"] = float(np.clip(base + jitter, 0.0, 1.0))
-
-    def reset(self, seed=None, options=None):
-        obs = self.env.reset()
-        self._init_profiles(seed)
-
-        obs_dict = {}
-        incentives = [0.0] * self.n_consumers
-        for i in range(self.n_consumers):
-            profile_vec = normalize_profile(self.profiles[i])
-            obs_dict[f"consumer_{i}"] = np.concatenate([
-                obs[i].astype(np.float32),
-                np.array([self.current_price, self.current_grid_limit, incentives[i]], dtype=np.float32),
-                profile_vec,
-            ])
-
-        obs_dict["aggregator"] = np.array([0.0, 0.0], dtype=np.float32)
-        obs_dict["grid"] = np.array([self.current_grid_limit], dtype=np.float32)
-        return obs_dict, {}
-
-    def step(self, actions):
-        # Extract aggregator action
-        agg_action = actions.get("aggregator", [0.5, 0.0])
-        self.current_price = float(agg_action[0])
-        self.last_incentive_budget = float(agg_action[1])
-
-        # Distribute incentives
-        weights = np.array([p["flexibility"] * p["willingness_to_shift"] for p in self.profiles])
-        if weights.sum() <= 1e-8:
-            weights = np.ones_like(weights)
-        weights = weights / (weights.sum() + 1e-12)
-        incentives = list((self.last_incentive_budget * weights).astype(float))
-
-        # Grid action
-        grid_action = actions.get("grid", [self.current_grid_limit])
-        self.current_grid_limit = float(grid_action[0])
-
-        # Step consumers
-        consumer_actions = [actions.get(f"consumer_{i}", [0.0])[0] for i in range(self.n_consumers)]
-        next_obs, _, done, _, _ = self.env.step(consumer_actions)
-
-        # Update dynamic profiles
-        self._update_dynamic_profiles(incentives)
-
-        # Build obs, rewards
-        obs_dict, rewards_dict = {}, {}
-        total_consumption = float(np.sum(self.env.net_electricity_consumption))
-        peak_demand = float(np.max(self.env.net_electricity_consumption))
-
-        for i in range(self.n_consumers):
-            profile_vec = normalize_profile(self.profiles[i])
-            obs_dict[f"consumer_{i}"] = np.concatenate([
-                next_obs[i].astype(np.float32),
-                np.array([self.current_price, self.current_grid_limit, incentives[i]], dtype=np.float32),
-                profile_vec,
-            ])
-
-            consumption = float(self.env.net_electricity_consumption[i])
-            comfort_dev = 0.0
-            emergency = self.profiles[i]["emergency_status"]
-            rewards_dict[f"consumer_{i}"] = consumer_reward(consumption, self.current_price, comfort_dev, emergency, incentives[i])
-
-        rewards_dict["aggregator"] = aggregator_reward(peak_demand, self.last_incentive_budget)
-        rewards_dict["grid"] = grid_reward(total_consumption, self.current_grid_limit)
-
-        obs_dict["aggregator"] = np.array([peak_demand, self.last_incentive_budget], dtype=np.float32)
-        obs_dict["grid"] = np.array([self.current_grid_limit], dtype=np.float32)
-
-        truncs = {a: False for a in self.agents}
-        terms = {a: done for a in self.agents}
-        infos = {a: {} for a in self.agents}
-        return obs_dict, rewards_dict, terms, truncs, infos
-
-    def render(self):
-        pass
-
-    def close(self):
-        self.env.close()
+    def reset(self):
+        self.state = self.env.reset()
+        self.step_count = 0
+        self.total_consumption = 0
+        return self.state
