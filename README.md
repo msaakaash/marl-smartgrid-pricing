@@ -53,7 +53,7 @@ collaborate to optimize power consumption using **hybrid price- and incentive-ba
 ### 1. Clone Repository
 ```bash
 git clone https://github.com/msaakaash/marl-smartgrid-pricing.git
-cd citylearn-marl-smartgrid
+cd marl-smartgrid-pricing
 ```
 
 ### 2. Create Virtual Environment (recommended)
