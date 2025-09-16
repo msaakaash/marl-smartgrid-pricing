@@ -46,6 +46,66 @@ collaborate to optimize power consumption using **hybrid price- and incentive-ba
 - **OpenAI Gym / CityLearn Environment**
 - **NumPy, Pandas, Matplotlib**
 
+
+
+## Installation
+
+### 1. Clone Repository
+```bash
+git clone https://github.com/msaakaash/marl-smartgrid-pricing.git
+cd citylearn-marl-smartgrid
+```
+
+### 2. Create Virtual Environment (recommended)
+```bash
+python -m venv venv
+source venv/bin/activate     
+venv\Scripts\activate       
+```
+
+### 3. Install Dependencies
+```bash
+pip install --upgrade pip
+pip install -r requirements.txt
+```
+
+Contents of `requirements.txt`:
+```txt
+numpy==1.26.4
+torch==2.2.0
+gymnasium==0.29.1
+pettingzoo==1.24.3
+citylearn==2.3.1
+tensorboard==2.16.2
+```
+
+## Usage
+
+### 1. Run a Smoke Test
+Check if the wrapper runs correctly:
+```bash
+python wrapper_citylearn_marl.py
+```
+
+### 2. Train Agents (Independent A2C)
+```bash
+python train_marl_a2c.py
+```
+- Rewards per agent are printed per update.  
+- Logs are saved to `runs/` for TensorBoard.
+
+View logs:
+```bash
+tensorboard --logdir runs
+```
+
+### 3. Evaluate Baseline
+Run a no-op baseline policy to collect metrics:
+```bash
+python evaluate.py
+```
+
+
 ## Contributors
 - M S Aakaash  
 - Karthik Ram S  
