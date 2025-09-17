@@ -40,7 +40,7 @@ collaborate to optimize power consumption using **hybrid price- and incentive-ba
 - Robustness to edge cases (non-participation, false reporting, overloads).  
 
 
-## 🛠️ Tech Stack
+## Tech Stack
 - **Python 3.x**
 - **TensorFlow / PyTorch**
 - **OpenAI Gym / CityLearn Environment**
