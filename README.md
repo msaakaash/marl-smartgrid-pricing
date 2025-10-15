@@ -105,6 +105,13 @@ Run a no-op baseline policy to collect metrics:
 python evaluate.py
 ```
 
+## Code of Conduct
+Please read our [Code of Conduct](docs/CODE_OF_CONDUCT.md) before contributing to this project.
+
+## License  
+This project is licensed under the [MIT LICENSE](LICENSE).
+
+
 
 ## Contributors
 - M S Aakaash  
