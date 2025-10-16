@@ -119,4 +119,4 @@ This project is licensed under the [MIT LICENSE](LICENSE).
 - Abishek K  
 - Ashwin T  
 
-Guide: **Dr. Radhika N**
+
