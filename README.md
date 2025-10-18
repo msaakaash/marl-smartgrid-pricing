@@ -114,7 +114,7 @@ This project is licensed under the [MIT LICENSE](LICENSE).
 
 
 ## Contributors
-- M S Aakaash  
+- Aakaash M S
 - Karthik Ram S  
 - Abishek K  
 - Ashwin T  
