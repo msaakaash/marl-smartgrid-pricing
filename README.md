@@ -108,6 +108,11 @@ python evaluate.py
 ## Code of Conduct
 Please read our [Code of Conduct](docs/CODE_OF_CONDUCT.md) before contributing to this project.
 
+
+## Security
+If you discover a vulnerability, please refer to our [Security Policy](docs/SECURITY.md) for instructions on how to report it responsibly.
+
+
 ## License  
 This project is licensed under the [MIT LICENSE](LICENSE).
 
