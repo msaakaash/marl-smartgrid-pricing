@@ -1,7 +1,6 @@
-# MARL-SmartGrid-Pricing
+<h1 align="center">MARL-SmartGrid-Pricing</h1>
 
 A research project implementing **Multi-Agent Reinforcement Learning (MARL)** for designing adaptive **pricing** and **incentive strategies** in smart grids.  
-The system enables buildings, aggregators, and the grid to act as intelligent agents that coordinate demand response (DR) efficiently while ensuring user comfort, cost savings, and grid stability.
 
 ## Problem Statement
 Traditional demand response (DR) systems often struggle with:
