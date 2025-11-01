@@ -1,58 +1,117 @@
 <h1 align="center">MARL-SmartGrid-Pricing</h1>
 
-A research project implementing **Multi-Agent Reinforcement Learning (MARL)** for designing adaptive **pricing** and **incentive strategies** in smart grids.  
+## Overview
+ 
+This project introduces a **Multi-Agent Reinforcement Learning (MARL)** framework for smart grid pricing, where **Consumers**, **Aggregators**, and a **Grid Controller** collaborate to optimize energy consumption using **hybrid price- and incentive-based mechanisms**.  
 
-## Problem Statement
-Traditional demand response (DR) systems often struggle with:
-- Real-time demand variability
-- Renewable energy fluctuations
-- Diverse consumer behavior  
-
-This project introduces a **MARL framework** where:
-- Buildings (consumer agents),  
-- Aggregators (regional controllers), and  
-- A Grid Controller  
-
-collaborate to optimize power consumption using **hybrid price- and incentive-based signals**.
-
-
-## Objectives
-- Develop a **three-layer MARL architecture** (Consumer, Aggregator, Grid).  
-- Implement **hybrid DR mechanisms** (price-based + incentive-based).  
-- Train agents with reward functions considering **cost, comfort, and grid stability**.  
-- Simulate using the **CityLearn dataset**.  
-- Evaluate system performance on:
-  - Peak load reduction  
-  - Cost efficiency  
-  - Fairness and robustness  
-
-
-## Methodology
-- **Algorithms:** Deep Q-Network (DQN), Deep Deterministic Policy Gradient (DDPG).  
-- **Benchmarking:** Compared against traditional single-agent and MARL-based DR systems.  
-- **Evaluation Metrics:** Peak load reduction, demand fairness, computational efficiency.  
-
-## Expected Outcomes
-- Adaptive and decentralized demand response.  
-- Improved **grid stability** under peak demand conditions.  
-- Balance between **consumer comfort** and **cost savings**.  
-- Robustness to edge cases (non-participation, false reporting, overloads).  
-
+## Features
+- **Three-layer MARL architecture** with Consumer, Aggregator, and Grid agents.  
+- **Hybrid demand response** combining price-based and incentive-based strategies.  
+- **Reinforcement learning algorithms**: DQN and DDPG.  
+- **Reward optimization** for cost, comfort, and grid stability.  
+- **Performance evaluation** on peak load reduction, cost efficiency, and fairness.  
+- **Scalable and adaptive** system robust to non-participation and edge conditions.
+ 
 
 ## Tech Stack
-- **Python 3.x**
-- **TensorFlow / PyTorch**
-- **OpenAI Gym / CityLearn Environment**
-- **NumPy, Pandas, Matplotlib**
+
+<table>
+  <thead>
+    <tr>
+      <th>Category</th>
+      <th>Tools / Technologies</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Programming Language</td>
+      <td>Python 3.10</td>
+    </tr>
+    <tr>
+      <td>Frameworks / Libraries</td>
+      <td>
+        PyTorch – Deep learning and reinforcement learning models<br>
+        CityLearn – Urban building energy simulation<br>
+        NumPy, Pandas – Numerical computation and data processing<br>
+        scikit-learn – Data preprocessing and utilities<br>
+        Gym – Reinforcement learning environment interface<br>
+        tqdm – Progress visualization
+      </td>
+    </tr>
+    <tr>
+      <td>Tools & Environment</td>
+      <td>
+        Virtual Environment (venv)<br>
+        Git & GitHub for version control<br>
+        Jupyter Notebook (optional, for analysis & visualization)
+      </td>
+    </tr>
+  </tbody>
+</table>
+
+## Installation Guide
+
+> Use **Python 3.10** for best compatibility.
 
 
+#### 1) Clone the Repository
 
-## Installation
-
-### 1. Clone Repository
 ```bash
-git clone https://github.com/msaakaash/marl-smartgrid-pricing.git
+git clone https://github.com/yourusername/marl-smartgrid-pricing.git
 cd marl-smartgrid-pricing
+```
+
+#### 2) Create Python 3.10 Virtual Environment
+
+**Windows (PowerShell)**
+
+```bash
+python -m venv marl_env310
+marl_env310\Scripts\activate
+```
+
+**macOS/Linux**
+
+```bash
+python3 -m venv marl_env310
+source marl_env310/bin/activate
+```
+
+#### 3) Install Dependencies
+
+> **Note:**   
+> - After activating the virtual environment, upgrade pip before installing dependencies:  
+>   ```bash
+>   pip install --upgrade pip
+>   ```
+> - Install all the requirements:
+>   ```bash
+>   pip install -r requirements.txt
+>   ```
+
+
+
+If you don’t have a `requirements.txt` file, create it with the following content:
+
+```text
+citylearn==1.5.0
+numpy==1.21.6
+pandas==1.3.5
+scikit-learn==1.0.2
+torch==1.12.0
+torchvision==0.13.0
+gym==0.25.1
+gym-notices==0.0.8
+simplejson==3.17.6
+tqdm
+```
+
+### 3) Usage
+
+Run the main script:
+
+```bash
+python main.py
 ```
 
 
