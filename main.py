@@ -2,7 +2,7 @@ import numpy as np
 import random
 import torch
 from tqdm import tqdm
-from citylearn import CityLearnEnv
+from citylearn.citylearn import CityLearnEnv
 from citylearn.building import Building
 from typing import List, Mapping, Any, Union
 import json
