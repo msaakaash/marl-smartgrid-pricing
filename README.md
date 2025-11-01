@@ -106,7 +106,7 @@ simplejson==3.17.6
 tqdm
 ```
 
-### 3) Usage
+## Usage
 
 Run the main script:
 
