@@ -1,8 +1,8 @@
-<h1 align="center">MARL-SmartGrid-Pricing</h1>
+<h1 align="center">MARL Smart Grid Pricing</h1>
 
 ## Overview
  
-This project introduces a **Multi-Agent Reinforcement Learning (MARL)** framework for smart grid pricing, where **Consumers**, **Aggregators**, and a **Grid Controller** collaborate to optimize energy consumption using **hybrid price- and incentive-based mechanisms**.  
+This project introduces a **Multi-Agent Reinforcement Learning (MARL)** framework for smart grid pricing, where **Consumers**, **Aggregators**, and a **Grid Controller** collaborate to optimize energy consumption using **hybrid price and incentive-based mechanisms**.  
 
 ## Features
 - **Three-layer MARL architecture** with Consumer, Aggregator, and Grid agents.  
@@ -116,8 +116,12 @@ python main.py
 
 
 
+
 ## Code of Conduct
 Please read our [Code of Conduct](docs/CODE_OF_CONDUCT.md) before contributing to this project.
+
+## Contributing
+Contributions are welcome! Please see [CONTRIBUTING.md](docs/CONTRIBUTING.md) for guidelines.
 
 
 ## Security
