@@ -135,7 +135,7 @@ This project is licensed under the [MIT LICENSE](LICENSE).
 
 ## Contributors
 - Aakaash M S
-- Karthik Ram S  
+- S Karthik Ram
 - Abishek K  
 - Ashwin T  
 
