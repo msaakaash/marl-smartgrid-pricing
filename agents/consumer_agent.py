@@ -33,7 +33,10 @@ class ConsumerAgentDQN:
         self.action_space = action_space
         self.discrete_actions = np.array([-0.5, 0.0, 0.5], dtype=np.float32)
         self.action_dim = len(self.discrete_actions)
-        self.observation_dim = 17
+        
+        # <--- CHANGE 1: Observation dimension is now 18 (to include both signals)
+        self.observation_dim = 18
+        
         self.device = torch.device(device if device is not None else ("cuda" if torch.cuda.is_available() else "cpu"))
         self.q_network = QNetwork(self.observation_dim, self.action_dim).to(self.device)
         self.target_q_network = QNetwork(self.observation_dim, self.action_dim).to(self.device)
@@ -60,7 +63,18 @@ class ConsumerAgentDQN:
         building_type_map = {"residential": 0, "hospital": 1, "office": 2, "mall": 3, "industry": 4, "cheater": 5}
         building_type_val = building_type_map.get(self.type, 0)
         is_prime_hour = 1.0 if obs_dict.get("hour") in self.prime_hours else 0.0
-        agg_signal_val = float(agg_signal[0]) if (agg_signal is not None and len(np.atleast_1d(agg_signal)) > 0) else 0.0
+
+        # <--- CHANGE 2: Correctly parse both price and incentive signals
+        agg_price_signal = 0.0
+        agg_incentive_signal = 0.0
+        if agg_signal is not None:
+            agg_signal = np.atleast_1d(agg_signal)
+            if len(agg_signal) > 0:
+                agg_price_signal = float(agg_signal[0])
+            if len(agg_signal) > 1:
+                agg_incentive_signal = float(agg_signal[1])
+        # --- End of Change 2 ---
+        
         self.soc = float(obs_dict.get("electrical_storage_soc", self.soc))
         observation = np.array([
             obs_dict.get("month", 0),
@@ -79,7 +93,9 @@ class ConsumerAgentDQN:
             self.cheating_propensity,
             1.0 if self.emergency_flag else 0.0,
             is_prime_hour,
-            agg_signal_val
+            # <--- CHANGE 3: Add both signals to the state
+            agg_price_signal,
+            agg_incentive_signal
         ], dtype=np.float32)
         return observation
 
@@ -100,6 +116,8 @@ class ConsumerAgentDQN:
             self.last_action_index = int(action_index)
             self.last_state = obs
             return np.array([action_value], dtype=np.float32), action_index
+        
+        # Standard epsilon-greedy selection
         if random.random() < self.epsilon:
             action_index = random.randrange(self.action_dim)
         else:
@@ -107,13 +125,19 @@ class ConsumerAgentDQN:
             with torch.no_grad():
                 q_values = self.q_network(state_tensor)
             action_index = int(torch.argmax(q_values, dim=1).item())
+        
+        # Get the action value from the agent's decision
         action_value = float(self.discrete_actions[action_index])
-        agg_signal = float(obs[-1]) if obs is not None else 0.0
-        influence = -1.0 * (agg_signal) * 0.1
-        action_value += influence
+
+        # <--- CHANGE 4: REMOVED the manual 'influence' logic.
+        # The agent must learn to respond to the signals (which are now in its state)
+        # on its own. This is what the 'agg_follow' reward is for.
+        
+        # Clip the chosen action to the environment's valid range
         low = float(self.action_space.low) if np.isscalar(self.action_space.low) else float(np.atleast_1d(self.action_space.low)[0])
         high = float(self.action_space.high) if np.isscalar(self.action_space.high) else float(np.atleast_1d(self.action_space.high)[0])
         action_value = float(np.clip(action_value, low, high))
+        
         self.last_action = action_value
         self.last_action_index = int(action_index)
         self.last_state = obs
@@ -182,12 +206,19 @@ class ConsumerAgentDQN:
         trust_term = (self.trust_score - 1.0)
         reward_shifting = - (electricity_pricing * current_power_demand) * 0.01
         agg_follow = 0.0
+        
+        # This reward logic is now fine, as the agent is truly learning.
+        # It rewards the agent for following the *price* signal (agg_val[0])
         if agg_signal is not None:
-            agg_val = float(np.atleast_1d(agg_signal)[0])
-            if agg_val > 0 and action_scalar < 0:
+            # We still only use the price signal for this reward component.
+            # The incentive signal's value will be learned implicitly
+            # as it affects the agent's state and future rewards.
+            agg_price_val = float(np.atleast_1d(agg_signal)[0])
+            if agg_price_val > 0 and action_scalar < 0: # High price -> discharge
                 agg_follow = 1.0
-            elif agg_val > 0 and action_scalar >= 0:
+            elif agg_price_val > 0 and action_scalar >= 0: # High price -> NOT discharge
                 agg_follow = -1.0
+                
         final_reward = (
             weights['env'] * reward_env +
             weights['constraint'] * reward_constraint +
@@ -242,7 +273,10 @@ class ConsumerAgentRuleBased:
         self.discrete_actions = np.array([-0.5, 0.0, 0.5], dtype=np.float32)
         self.action_dim = len(self.discrete_actions)
         self.soc = 0.0
-        self.observation_dim = 17
+        
+        # <--- CHANGE 5: Observation dimension updated for consistency
+        self.observation_dim = 18
+        
         self.last_action = 0.0
         self.last_action_index = 1
         self.reward_history = []
@@ -254,7 +288,17 @@ class ConsumerAgentRuleBased:
         building_type_map = {"residential": 0, "hospital": 1, "office": 2, "mall": 3, "industry": 4, "cheater": 5}
         building_type_val = building_type_map.get(self.type, 0)
         is_prime_hour = 1.0 if obs_dict.get("hour") in self.prime_hours else 0.0
-        agg_signal_val = float(agg_signal[0]) if (agg_signal is not None and len(np.atleast_1d(agg_signal)) > 0) else 0.0
+        
+        # Also update the rule-based agent to "see" both signals
+        agg_price_signal = 0.0
+        agg_incentive_signal = 0.0
+        if agg_signal is not None:
+            agg_signal = np.atleast_1d(agg_signal)
+            if len(agg_signal) > 0:
+                agg_price_signal = float(agg_signal[0])
+            if len(agg_signal) > 1:
+                agg_incentive_signal = float(agg_signal[1])
+
         self.soc = float(obs_dict.get("electrical_storage_soc", self.soc))
         observation = np.array([
             obs_dict.get("month", 0),
@@ -273,24 +317,27 @@ class ConsumerAgentRuleBased:
             self.cheating_propensity,
             1.0 if self.emergency_flag else 0.0,
             is_prime_hour,
-            agg_signal_val
+            agg_price_signal,      # Add price
+            agg_incentive_signal   # Add incentive
         ], dtype=np.float32)
         return observation
 
     def select_action(self, obs):
-        agg_signal = obs[-1]
+        # The rule-based agent can now also use the new signals
+        agg_price_signal = obs[16]
+        agg_incentive_signal = obs[17]
         electricity_pricing = obs[10]
         soc = obs[9]
         hour = obs[2]
 
         action_index = 1  # Default to no action (0.0)
 
-        # Rule 1: Respond to aggregator signal
-        if agg_signal > 0.5:
+        # Rule 1: Respond to aggregator PRICE signal
+        if agg_price_signal > 0.5:
             action_index = 0  # Reduce consumption
         
         # Rule 2: Respond to high electricity pricing
-        elif electricity_pricing > 0.2: # Assuming 0.2 is a "high" price threshold
+        elif electricity_pricing > 0.2:
             action_index = 0  # Reduce consumption
         
         # Rule 3: Charge battery during low-cost/high-solar hours if SoC is low
@@ -314,21 +361,14 @@ class ConsumerAgentRuleBased:
         
         return np.array([action_value], dtype=np.float32), action_index
 
+    # ... all other methods for RuleBased (learn, store, etc.) remain empty ...
     def store_experience(self, *args):
-        # Rule-based agent doesn't store experience for learning
         pass
-    
     def learn(self):
-        # Rule-based agent doesn't learn
         return None
-
     def update_target_network(self):
-        # Rule-based agent doesn't have a target network
         pass
-
     def get_reward(self, raw_reward, current_power_demand, action_value, soc_before_action, electricity_pricing, agg_signal=None):
-        # This method is the same as the DQN agent's reward method,
-        # but the agent itself doesn't learn from it.
         try:
             action_scalar = float(np.asarray(action_value).item())
         except Exception:
@@ -355,10 +395,10 @@ class ConsumerAgentRuleBased:
         reward_shifting = - (electricity_pricing * current_power_demand) * 0.01
         agg_follow = 0.0
         if agg_signal is not None:
-            agg_val = float(np.atleast_1d(agg_signal)[0])
-            if agg_val > 0 and action_scalar < 0:
+            agg_price_val = float(np.atleast_1d(agg_signal)[0])
+            if agg_price_val > 0 and action_scalar < 0:
                 agg_follow = 1.0
-            elif agg_val > 0 and action_scalar >= 0:
+            elif agg_price_val > 0 and action_scalar >= 0:
                 agg_follow = -1.0
         final_reward = (
             weights['env'] * reward_env +
@@ -374,15 +414,10 @@ class ConsumerAgentRuleBased:
         else:
             self.satisfaction_history.append(1.0)
         return float(final_reward)
-
     def report_response(self, expected_reduction, actual_reduction):
-        # Not applicable for a rule-based agent as it doesn't have a trust score
         pass
-    
     def set_emergency(self, flag=True):
-        # Not applicable for a rule-based agent
         pass
-
     def reset_episode(self):
         self.last_action = 0.0
         self.last_action_index = 1
