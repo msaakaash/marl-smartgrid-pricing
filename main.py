@@ -222,11 +222,15 @@ def run_training_and_simulation(
             for c in consumer_agents:
                 new_targeted_signal = current_agg_signals_dict[c.id]
                 obs_18dim_new = c.get_observation(
-                    obs_dict[c.id], building_obs_names[c.id], agg_signal=new_targeted_signal
-                )
+                    obs_dict[c.id], building_obs_names[c.id],agg_signal=new_targeted_signal
+                    )
+
                 action_value, action_index = c.select_action(obs_18dim_new)
-                all_actions.append(action_value)
-                current_consumer_actions[c.id] = float(action_value.item())
+                action_scalar = float(action_value.item())
+
+                all_actions.append([action_scalar])
+                current_consumer_actions[c.id] = action_scalar
+
 
             # 4. ENV STEP
             next_observations, raw_rewards, done, info = env.step(all_actions)
@@ -255,34 +259,50 @@ def run_training_and_simulation(
                     soc_before = float(c.building.electrical_storage.soc[-1]) if len(c.building.electrical_storage.soc) > 0 else 0.0
                     current_price = float(obs_dict[c.id][10]) if len(obs_dict[c.id]) > 10 else 0.0
                     agg_signal_val = current_agg_signals_dict[c.id]
+
                     action_value = all_actions[action_idx]
+                    if isinstance(action_value, (list, tuple, np.ndarray)):
+                        action_scalar = float(np.atleast_1d(action_value)[0])
+                    else:
+                        action_scalar = float(action_value)
+
                     raw_reward = raw_rewards[action_idx]
                     custom_reward = c.get_reward(
-                        raw_reward, c.building.net_electricity_consumption[-1],
-                        action_value, soc_before, current_price, agg_signal_val
+                        raw_reward,
+                        c.building.net_electricity_consumption[-1],
+                        action_scalar,                     
+                        soc_before,
+                        current_price,
+                        agg_signal_val
                     )
+
                     next_state = c.get_observation(
                         next_obs_dict[c.id], building_obs_names[c.id], agg_signal=agg_signal_val
                     )
-                    
+
                     c.store_experience(c.last_state, c.last_action_index, custom_reward, next_state, done)
                     if t % train_every_n_steps == 0:
                         c.learn()
-                    
+
                     consumer_episode_stats[c.id]["reward_sum"] += float(custom_reward)
                     consumer_episode_stats[c.id]["steps"] += 1
                     consumer_episode_stats[c.id]["energy_sum"] += float(c.building.net_electricity_consumption[-1])
 
                     row = {
-                        "episode": episode, "time_step": t, "consumer_id": c.id, "consumer_type": c_type,
+                        "episode": episode,
+                        "time_step": t,
+                        "consumer_id": c.id,
+                        "consumer_type": c_type,
                         "total_demand": float(current_total_demand),
                         "net_electricity_consumption": float(c.building.net_electricity_consumption[-1]),
-                        "soc_after_action": soc_before, "agg_signal": agg_signal_val.tolist(),
-                        "action": float(np.atleast_1d(action_value).item()), "reward": float(custom_reward)
+                        "soc_after_action": soc_before,
+                        "agg_signal": agg_signal_val.tolist(),
+                        "action": action_scalar,             
+                        "reward": float(custom_reward),
                     }
-                    # --- CHANGE: Save to current episode list ---
                     current_episode_step_records.append(row)
                     action_idx += 1
+
 
             # 6. AGGREGATOR LEARNING (with speedup)
             regional_demands_by_agg = []
@@ -416,7 +436,7 @@ if __name__ == "__main__":
     except Exception: pass
 
     run_training_and_simulation(
-        num_episodes=50, 
+        num_episodes=2, 
         use_ddpg_aggregator=True,
         train_every_n_steps=4 # <-- SPEEDUP parameter
     )

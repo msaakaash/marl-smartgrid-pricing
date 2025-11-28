@@ -45,7 +45,7 @@ class SecureChannel:
 # ==========================================================
 
 class QNetwork(nn.Module):
-    def __init__(self, input_dim=18, output_dim=5):
+    def __init__(self, input_dim=30, output_dim=5):
         super().__init__()
         self.fc = nn.Sequential(
             nn.Linear(input_dim, 128),
@@ -73,7 +73,7 @@ class ConsumerAgentDQN:
         self.device = torch.device("cpu")
 
         # RL components
-        self.state_dim = 18
+        self.state_dim = 30
         self.action_dim = 5
         self.gamma = 0.99
         self.lr = 1e-3
@@ -103,7 +103,7 @@ class ConsumerAgentDQN:
 
     # -------------- Observation Builder ---------------
     def get_observation(self, raw_obs, obs_names, agg_signal):
-        """18-dim observation = raw_obs + decrypted agg_signal"""
+        """30-dim observation = raw_obs + decrypted agg_signal"""
         raw_obs = np.array(raw_obs, dtype=np.float32)
         if agg_signal is None:
             agg_signal = np.array([0.0, 0.0], dtype=np.float32)
@@ -154,10 +154,10 @@ class ConsumerAgentDQN:
         batch = random.sample(self.memory, self.batch_size)
         s, a, r, s2, done = zip(*batch)
 
-        s = torch.tensor(s, dtype=torch.float32)
+        s = torch.from_numpy(np.array(s, dtype=np.float32))
         a = torch.tensor(a, dtype=torch.int64).unsqueeze(1)
         r = torch.tensor(r, dtype=torch.float32).unsqueeze(1)
-        s2 = torch.tensor(s2, dtype=torch.float32)
+        s2 = torch.from_numpy(np.array(s2, dtype=np.float32))
         done = torch.tensor(done, dtype=torch.float32).unsqueeze(1)
 
         q_pred = self.policy_net(s).gather(1, a)

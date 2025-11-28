@@ -1,80 +1,37 @@
-# security/secure_channel.py
-
+# secure_channel.py
 import os
-import json
 from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
 
-
 class SecureChannel:
-    """
-    Lightweight AEAD encryption handler using ChaCha20-Poly1305.
-    Used to protect communication between Aggregator <-> Consumers.
-    """
-
-    def __init__(self, key_path=None):
-        # Default key location: security/keys/secret.key
-        if key_path is None:
-            base_dir = os.path.dirname(os.path.abspath(__file__))   # security/
-            key_dir = os.path.join(base_dir, "keys")
-            key_path = os.path.join(key_dir, "secret.key")
-
-        if not os.path.exists(key_path):
-            raise FileNotFoundError(
-                f"[SecureChannel] ERROR: Key file not found at {key_path}\n"
-                f"Run `python security/generate_key.py` first."
-            )
-
+    def _init_(self, key_path="security/keys/secret.key", debug=False):
         with open(key_path, "rb") as f:
             self.key = f.read()
-
-        if len(self.key) != 32:
-            raise ValueError("[SecureChannel] Key must be 32 bytes.")
-
         self.aead = ChaCha20Poly1305(self.key)
+        self.debug = debug
 
-    # --------------------------------------------------------
-    # ENCRYPT
-    # --------------------------------------------------------
-    def encrypt(self, message: dict) -> dict:
-        """
-        Encrypts a Python dict and returns:
-        {
-            "nonce": ...,
-            "ciphertext": ...,
-            "tag": ...
-        }
-        """
-        # Serialize dict → bytes
-        plaintext = json.dumps(message).encode("utf-8")
-
-        # 96-bit (12-byte) random nonce
+    def encrypt(self, plaintext: bytes) -> bytes:
         nonce = os.urandom(12)
-
-        # AEAD encryption → ciphertext + tag
         ciphertext = self.aead.encrypt(nonce, plaintext, None)
+        packet = nonce + ciphertext
 
-        # Return Base64-safe (bytes → hex)
-        return {
-            "nonce": nonce.hex(),
-            "ciphertext": ciphertext.hex()
-        }
+        if self.debug:
+            print("\n🔐 [ENCRYPT]")
+            print(f"Nonce: {nonce.hex()}")
+            print(f"Plaintext: {plaintext.decode(errors='ignore')}")
+            print(f"Ciphertext: {ciphertext.hex()}")
+            print(f"Packet (nonce+ciphertext): {packet.hex()}")
 
-    # --------------------------------------------------------
-    # DECRYPT
-    # --------------------------------------------------------
-    def decrypt(self, packet: dict) -> dict | None:
-        """
-        Decrypts incoming packet.
-        Returns dict if valid,
-        Returns None if authentication fails (attack detected).
-        """
-        try:
-            nonce = bytes.fromhex(packet["nonce"])
-            ciphertext = bytes.fromhex(packet["ciphertext"])
+        return packet
 
-            plaintext = self.aead.decrypt(nonce, ciphertext, None)
-            return json.loads(plaintext.decode("utf-8"))
+    def decrypt(self, packet: bytes) -> bytes:
+        nonce = packet[:12]
+        ciphertext = packet[12:]
+        plaintext = self.aead.decrypt(nonce, ciphertext, None)
 
-        except Exception:
-            # Authentication failed (tampering, corruption, replay, etc.)
-            return None
+        if self.debug:
+            print("\n🔓 [DECRYPT]")
+            print(f"Nonce: {nonce.hex()}")
+            print(f"Ciphertext: {ciphertext.hex()}")
+            print(f"Plaintext: {plaintext.decode(errors='ignore')}")
+
+        return plaintext
