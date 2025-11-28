@@ -9,4 +9,4 @@ __pycache__/
 *.pyd
 
 # security keys
-security/keys/security.key 
+security\keys\secret.key
