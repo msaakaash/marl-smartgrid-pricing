@@ -8,3 +8,4 @@ gym==0.25.1
 gym-notices==0.0.8
 simplejson==3.17.6
 tqdm
+cryptography==41.0.3
