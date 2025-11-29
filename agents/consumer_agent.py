@@ -4,41 +4,10 @@ import torch.nn as nn
 import torch.optim as optim
 import random
 from collections import deque
-from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
 
-# ==========================================================
-#              SECURE COMMUNICATION LAYER
-# ==========================================================
+# NEW secure channel import
+from secure_channel import SecureChannel
 
-class SecureChannel:
-    def __init__(self, key_path="security/keys/secret.key"):
-        with open(key_path, "rb") as f:
-            self.key = f.read()
-        self.aead = ChaCha20Poly1305(self.key)
-
-    def encrypt(self, signal: np.ndarray) -> dict:
-        """Encrypt the 2-dim signal using AEAD"""
-        nonce = np.random.bytes(12)
-        plaintext = signal.astype(np.float32).tobytes()
-        ciphertext = self.aead.encrypt(nonce, plaintext, None)
-        return {
-            "nonce": nonce,
-            "ciphertext": ciphertext,
-        }
-
-    def decrypt(self, packet: dict) -> np.ndarray:
-        """Decrypt AEAD packet. Returns fallback safe signal if tampered."""
-        try:
-            plaintext = self.aead.decrypt(
-                packet["nonce"],
-                packet["ciphertext"],
-                None
-            )
-            arr = np.frombuffer(plaintext, dtype=np.float32)
-            return arr
-        except Exception:
-            # Attack detected — return safe default
-            return np.array([0.0, 0.0], dtype=np.float32)
 
 # ==========================================================
 #                      DQN NETWORKS
@@ -58,6 +27,7 @@ class QNetwork(nn.Module):
     def forward(self, x):
         return self.fc(x)
 
+
 # ==========================================================
 #                SECURE CONSUMER DQN AGENT
 # ==========================================================
@@ -65,7 +35,7 @@ class QNetwork(nn.Module):
 class ConsumerAgentDQN:
     def __init__(self, building, building_id, metadata, action_space,
                  key_path="security/keys/secret.key"):
-        
+
         self.id = building_id
         self.building = building
         self.metadata = metadata
@@ -80,7 +50,7 @@ class ConsumerAgentDQN:
         self.epsilon = 1.0
         self.epsilon_decay = 0.9995
         self.epsilon_min = 0.05
-        
+
         self.memory = deque(maxlen=50000)
         self.batch_size = 64
 
@@ -90,28 +60,39 @@ class ConsumerAgentDQN:
 
         self.optimizer = optim.Adam(self.policy_net.parameters(), lr=self.lr)
 
-        # Secure communication
-        self.secure = SecureChannel(key_path)
+        # NEW secure communication channel
+        # debug=True enables printing encryption/decryption details
+        self.secure = SecureChannel(key_path, debug=True)
 
         # Track last action for training
         self.last_state = None
         self.last_action_index = None
 
-    # -------------- Secure Communication --------------
+    # -----------------------------------------------------
+    #               SECURE COMMUNICATION
+    # -----------------------------------------------------
     def decrypt_signal(self, encrypted_packet):
-        return self.secure.decrypt(encrypted_packet)
+        """
+        Decrypts the aggregator AES-AD encrypted packet OR plaintext fallback.
+        Returns np.array([x, y], dtype=float32)
+        """
+        return self.secure.decrypt_vector(encrypted_packet)
 
-    # -------------- Observation Builder ---------------
+    # -----------------------------------------------------
+    #              BUILD 30-DIM OBSERVATION
+    # -----------------------------------------------------
     def get_observation(self, raw_obs, obs_names, agg_signal):
-        """30-dim observation = raw_obs + decrypted agg_signal"""
         raw_obs = np.array(raw_obs, dtype=np.float32)
+
         if agg_signal is None:
             agg_signal = np.array([0.0, 0.0], dtype=np.float32)
 
         full = np.concatenate([raw_obs, agg_signal])
         return full
 
-    # -------------- Reward Function -------------------
+    # -----------------------------------------------------
+    #                  REWARD FUNCTION
+    # -----------------------------------------------------
     def get_reward(self, raw_reward, net_energy, action, soc_before,
                    price, agg_signal):
         r = raw_reward
@@ -122,7 +103,9 @@ class ConsumerAgentDQN:
             r -= 0.2
         return float(r)
 
-    # -------------- Epsilon-Greedy Action --------------
+    # -----------------------------------------------------
+    #            EPSILON-GREEDY ACTION SELECTION
+    # -----------------------------------------------------
     def select_action(self, state):
         state_t = torch.tensor(state, dtype=torch.float32).to(self.device).unsqueeze(0)
 
@@ -133,7 +116,7 @@ class ConsumerAgentDQN:
                 q_values = self.policy_net(state_t)
             action_index = int(torch.argmax(q_values).item())
 
-        # Map discrete index to real action
+        # map discrete index to action value
         action_values = [-1.0, -0.5, 0.0, 0.5, 1.0]
         action = action_values[action_index]
 
@@ -142,11 +125,15 @@ class ConsumerAgentDQN:
 
         return torch.tensor([action], dtype=torch.float32), action_index
 
-    # -------------- Replay Buffer ----------------------
+    # -----------------------------------------------------
+    #                   REPLAY BUFFER
+    # -----------------------------------------------------
     def store_experience(self, s, a, r, s2, done):
         self.memory.append((s, a, r, s2, done))
 
-    # -------------- Learning ---------------------------
+    # -----------------------------------------------------
+    #                      LEARNING
+    # -----------------------------------------------------
     def learn(self):
         if len(self.memory) < self.batch_size:
             return
@@ -173,18 +160,24 @@ class ConsumerAgentDQN:
 
         self.epsilon = max(self.epsilon_min, self.epsilon * self.epsilon_decay)
 
-    # -------------- Episode Reset ----------------------
+    # -----------------------------------------------------
+    #                 EPISODE RESET
+    # -----------------------------------------------------
     def reset_episode(self):
         pass
 
-    # -------------- Model Saving -----------------------
+    # -----------------------------------------------------
+    #                  SAVE MODELS
+    # -----------------------------------------------------
     def save_models(self, path, episode):
         torch.save(self.policy_net.state_dict(),
                    f"{path}/consumer_policy_{self.id}_ep{episode}.pth")
         torch.save(self.target_net.state_dict(),
                    f"{path}/consumer_target_{self.id}_ep{episode}.pth")
 
-    # -------------- Model Loading ----------------------
+    # -----------------------------------------------------
+    #                  LOAD MODELS
+    # -----------------------------------------------------
     def load_models(self, path, episode):
         try:
             self.policy_net.load_state_dict(torch.load(
