@@ -1,3 +1,4 @@
+# main.py
 # ================================================================
 #   main.py  (FINAL – Secure MARL with ChaCha20-Poly1305)
 # ================================================================
@@ -5,14 +6,15 @@
 import os
 import json
 import random
+import re
+from typing import List, Mapping, Any, Union, Dict
+
 import numpy as np
 import pandas as pd
+import torch
 from tqdm import tqdm
-from typing import List, Mapping, Any, Union, Dict
 from citylearn.citylearn import CityLearnEnv
 from citylearn.building import Building
-import torch
-import re
 
 # --- IMPORT AGENTS ---
 from agents.consumer_agent import ConsumerAgentDQN
@@ -68,7 +70,8 @@ def build_consumers_from_env(env, building_obs_names):
 
         metadata = {
             "building_type": random.choice(
-                ["residential", "office", "mall", "hospital", "school"]),
+                ["residential", "office", "mall", "hospital", "school"]
+            ),
             "critical_load_fraction": random.uniform(0.1, 0.3),
             "prime_hours": random.sample(range(8, 20), 3),
             "cheating_propensity": random.uniform(0.0, 0.3),
@@ -191,14 +194,14 @@ def run_training_and_simulation(
         try:
             df_old = pd.read_csv(csv_path)
             all_step_records = df_old.to_dict("records")
-        except:
+        except Exception:
             pass
 
         try:
             with open(json_path) as f:
                 summary_old = json.load(f)
                 all_episodes_summary = summary_old.get("episodes", [])
-        except:
+        except Exception:
             pass
 
     # ================================================================
@@ -230,42 +233,40 @@ def run_training_and_simulation(
 
             current_consumer_states = {}
 
-            # -----------------------------------------------------------
+            # -------------------------------------------------------
             # 1. Build consumer states
-            # -----------------------------------------------------------
+            # -------------------------------------------------------
             for c in consumer_agents:
                 state = c.get_observation(
                     obs_dict[c.id],
-                    building_obs_names[c.id],
+                    building_obs_names.get(c.id),
                     last_agg_signals[c.id]
                 )
                 current_consumer_states[c.id] = state
 
-            # -----------------------------------------------------------
+            # -------------------------------------------------------
             # 2. Aggregators act → produce raw 10-dim vector
-            # -----------------------------------------------------------
+            # -------------------------------------------------------
             encrypted_packets_for_consumers = {}
 
             for agg in aggregator_agents:
 
                 state_list = [current_consumer_states[c.id] for c in agg.consumers]
-                agg_state_90 = agg.get_observation(state_list)
+                agg_state = agg.get_observation(state_list)
 
-                raw_action_10dim = agg.select_action(agg_state_90)
-                agg.last_state = agg_state_90
+                raw_action_10dim = agg.select_action(agg_state)
+                agg.last_state = agg_state
                 agg.last_actions = raw_action_10dim
 
-                # -------------------------------------------------------
-                #  SECURE PHASE → encryption for each consumer
-                # -------------------------------------------------------
+                # SECURE PHASE → encryption for each consumer
                 encrypted_packets = agg.encrypt_signals_for_consumers(raw_action_10dim)
 
                 for cid, packet in encrypted_packets.items():
                     encrypted_packets_for_consumers[cid] = packet
 
-            # -----------------------------------------------------------
+            # -------------------------------------------------------
             # 3. Consumers decrypt + act
-            # -----------------------------------------------------------
+            # -------------------------------------------------------
             all_actions = []
             consumer_actions_scalar = {}
 
@@ -276,7 +277,7 @@ def run_training_and_simulation(
 
                 state = c.get_observation(
                     obs_dict[c.id],
-                    building_obs_names[c.id],
+                    building_obs_names.get(c.id),
                     decrypted_signal
                 )
 
@@ -287,15 +288,15 @@ def run_training_and_simulation(
                 consumer_actions_scalar[c.id] = action_scalar
                 last_agg_signals[c.id] = decrypted_signal
 
-            # -----------------------------------------------------------
+            # -------------------------------------------------------
             # 4. Environment step
-            # -----------------------------------------------------------
+            # -------------------------------------------------------
             next_obs, raw_rewards, done, info = env.step(all_actions)
             next_obs_dict = {i: next_obs[i] for i in range(len(next_obs))}
 
-            # -----------------------------------------------------------
+            # -------------------------------------------------------
             # 5. Consumer Learning
-            # -----------------------------------------------------------
+            # -------------------------------------------------------
             action_idx = 0
             for agg in aggregator_agents:
                 for c in agg.consumers:
@@ -311,7 +312,9 @@ def run_training_and_simulation(
                     )
 
                     next_state = c.get_observation(
-                        next_obs_dict[c.id], building_obs_names[c.id], last_agg_signals[c.id]
+                        next_obs_dict[c.id],
+                        building_obs_names.get(c.id),
+                        last_agg_signals[c.id]
                     )
 
                     c.store_experience(c.last_state, c.last_action_index,
@@ -321,7 +324,8 @@ def run_training_and_simulation(
                         c.learn()
 
                     row = {
-                        "episode": episode, "time_step": t,
+                        "episode": episode,
+                        "time_step": t,
                         "consumer_id": c.id,
                         "consumer_type": c.building_type,
                         "total_demand": float(sum(b.net_electricity_consumption[-1] for b in env.buildings)),
@@ -336,9 +340,9 @@ def run_training_and_simulation(
 
                     action_idx += 1
 
-            # -----------------------------------------------------------
+            # -------------------------------------------------------
             # 6. Aggregator Learning
-            # -----------------------------------------------------------
+            # -------------------------------------------------------
             regional_demands = []
             for agg in aggregator_agents:
                 regional_demands.append(sum(c.building.net_electricity_consumption[-1]
@@ -354,7 +358,7 @@ def run_training_and_simulation(
                     next_states_list.append(
                         c.get_observation(
                             next_obs_dict[c.id],
-                            building_obs_names[c.id],
+                            building_obs_names.get(c.id),
                             last_agg_signals[c.id]
                         )
                     )
