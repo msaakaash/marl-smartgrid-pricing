@@ -1,77 +1,63 @@
 # secure_channel.py
-import os
 import numpy as np
 from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
 
 
 class SecureChannel:
-    def __init__(self, key_path="security/keys/secret.key", debug=True):
-        """Secure AEAD encryption channel"""
+    """Lightweight AEAD secure communication using ChaCha20-Poly1305.
+       Prints encryption/decryption logs for educational/training demonstration.
+    """
+
+    def __init__(self, key_path="security/keys/secret.key", verbose=True):
         with open(key_path, "rb") as f:
             self.key = f.read()
 
         self.aead = ChaCha20Poly1305(self.key)
-        self.debug = debug
+        self.verbose = verbose
 
-    # ---------------------------------------------------------
-    # Encrypt numeric vector (aggregator output)
-    # ---------------------------------------------------------
-    def encrypt_vector(self, vector):
-        """
-        Input: Python list/np array → floats
-        Output: packet (bytes)
-        """
-        vec = np.array(vector, dtype=np.float32)
-        plaintext = vec.tobytes()
-        nonce = os.urandom(12)
+    # ----------------------------------------------------------------------
+    #                             ENCRYPTION
+    # ----------------------------------------------------------------------
+    def encrypt(self, signal: np.ndarray) -> dict:
+        """Encrypt a numpy float32 vector (e.g., aggregator signal)."""
+
+        nonce = np.random.bytes(12)
+        plaintext = signal.astype(np.float32).tobytes()
+
         ciphertext = self.aead.encrypt(nonce, plaintext, None)
 
-        packet = nonce + ciphertext
+        if self.verbose:
+            print("\n🔐 ENCRYPTION EVENT")
+            print("Nonce:", nonce.hex())
+            print("Plaintext:", signal)
+            print("Ciphertext:", ciphertext.hex()[:80], "...")
 
-        if self.debug:
-            print("\n🔐 === ENCRYPTION (Aggregator → Consumer) ===")
-            print(f"Input Vector: {vector}")
-            print(f"Nonce: {nonce.hex()}")
-            print(f"Ciphertext: {ciphertext.hex()}")
-            print(f"Sent Packet: {packet.hex()}")
+        return {"nonce": nonce, "ciphertext": ciphertext}
 
-        return packet
-
-    # ---------------------------------------------------------
-    # Decrypt packet (consumer input)
-    # ---------------------------------------------------------
-    def decrypt_vector(self, packet):
-        """
-        Input: packet = nonce + ciphertext
-        Output: np array of float32
-        """
-
-        if packet.startswith(b"PLAINTEXT:"):
-            # Fallback plaintext
-            raw = packet.replace(b"PLAINTEXT:", b"")
-            vec = np.array(list(map(float, raw.decode().split(","))), dtype=np.float32)
-
-            if self.debug:
-                print("\n🟡 PLAINTEXT FALLBACK (No Encryption)")
-                print(f"Vector: {vec}")
-
-            return vec
+    # ----------------------------------------------------------------------
+    #                             DECRYPTION
+    # ----------------------------------------------------------------------
+    def decrypt(self, packet: dict) -> np.ndarray:
+        """Decrypt AEAD packet. If authentication fails → safe fallback."""
 
         try:
-            nonce = packet[:12]
-            ciphertext = packet[12:]
-            plaintext = self.aead.decrypt(nonce, ciphertext, None)
+            plaintext = self.aead.decrypt(
+                packet["nonce"],
+                packet["ciphertext"],
+                None
+            )
+
             arr = np.frombuffer(plaintext, dtype=np.float32)
 
-            if self.debug:
-                print("\n🔓 === DECRYPTION (Consumer Receives) ===")
-                print(f"Nonce: {nonce.hex()}")
-                print(f"Ciphertext: {ciphertext.hex()}")
-                print(f"Recovered Vector: {arr}")
+            if self.verbose:
+                print("\n🔓 DECRYPTION EVENT — SUCCESS")
+                print("Nonce:", packet["nonce"].hex())
+                print("Decrypted Signal:", arr)
 
             return arr
 
-        except Exception as e:
-            print("\n🚨 **TAMPERING DETECTED** — Returning SAFE vector")
-            print(f"Error: {e}")
-            return np.zeros(2, dtype=np.float32)
+        except Exception:
+            safe = np.array([0.0, 0.0], dtype=np.float32)
+            print("\n⚠️  DECRYPTION FAILED — ATTACK DETECTED!")
+            print("Packet dropped. Using safe fallback:", safe)
+            return safe
