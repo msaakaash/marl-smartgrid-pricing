@@ -18,43 +18,41 @@ from security.secure_channel import SecureChannel
 class Actor(nn.Module):
     def __init__(self, input_dim: int, output_dim: int):
         super().__init__()
-        self.net = nn.Sequential(
-            nn.Linear(input_dim, hidden_dim),
+        self.fc = nn.Sequential(
+            nn.Linear(input_dim, 256),
             nn.ReLU(),
-            nn.Linear(hidden_dim, max(hidden_dim // 2, 16)),
+            nn.Linear(256, 128),
             nn.ReLU(),
-            nn.Linear(max(hidden_dim // 2, 16), output_dim),
-            nn.Tanh()  # bounded outputs in [-1,1]
+            nn.Linear(128, output_dim),
+            nn.Tanh()    # output between -1 and 1
         )
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.net(x)
+    def forward(self, x):
+        return self.fc(x)
 
 
 class Critic(nn.Module):
     def __init__(self, state_dim: int, action_dim: int):
         super().__init__()
-        self.net = nn.Sequential(
-            nn.Linear(state_dim + action_dim, hidden_dim),
+        self.fc = nn.Sequential(
+            nn.Linear(state_dim + action_dim, 256),
             nn.ReLU(),
-            nn.Linear(hidden_dim, max(hidden_dim // 2, 16)),
+            nn.Linear(256, 128),
             nn.ReLU(),
-            nn.Linear(max(hidden_dim // 2, 16), 1)
+            nn.Linear(128, 1)
         )
 
-    def forward(self, s: torch.Tensor, a: torch.Tensor) -> torch.Tensor:
+    def forward(self, s, a):
         x = torch.cat([s, a], dim=-1)
-        return self.net(x)
+        return self.fc(x)
 
 
-# ----------------------------
-# Aggregator Agent
-# ----------------------------
+# ============================================================================
+#                            AGGREGATOR AGENT DDPG
+# ============================================================================
+
 class AggregatorAgentDDPG:
-    """
-    Aggregator agent that creates per-consumer signals and encrypts them via SecureChannel.
-    Dimensions are derived from consumers list where possible.
-    """
+    """Secure Aggregator Agent"""
 
     def __init__(self, region_id: int, consumers: list,
                  key_path: str = "security/keys/secret.key"):
@@ -72,9 +70,7 @@ class AggregatorAgentDDPG:
         self.lr_actor = 1e-3
         self.lr_critic = 2e-3
         self.batch_size = 64
-        self.tau = 0.005
-        self.replay_capacity = 100000
-        self.memory = deque(maxlen=self.replay_capacity)
+        self.memory = deque(maxlen=100000)
 
         # Networks (lazy init once we see a real state)
         self.actor = None
@@ -135,12 +131,8 @@ class AggregatorAgentDDPG:
 
         s = torch.tensor(state_vec, dtype=torch.float32, device=self.device).unsqueeze(0)
         with torch.no_grad():
-            a = self.actor(s).cpu().numpy()[0]
-        if noise_std and noise_std > 0.0:
-            a = a + np.random.normal(0.0, noise_std, size=a.shape)
-        a = np.clip(a, -1.0, 1.0)
-        self.last_actions = a.astype(np.float32)
-        return self.last_actions
+            action = self.actor(s).cpu().numpy()[0]
+        return action
 
     # ========================================================================
     def store_experience(self, s, a, next_c_actions, r, s2, done):
@@ -157,7 +149,7 @@ class AggregatorAgentDDPG:
             return None, None
 
         batch = random.sample(self.memory, self.batch_size)
-        s_b, a_b, c_b, r_b, s2_b, done_b = zip(*batch)
+        s, a, next_c_actions, r, s2, done = zip(*batch)
 
         s = torch.tensor(np.array(s), dtype=torch.float32, device=self.device)
         a = torch.tensor(np.array(a), dtype=torch.float32, device=self.device)
@@ -169,7 +161,7 @@ class AggregatorAgentDDPG:
         with torch.no_grad():
             a2 = self.actor_target(s2)
             q2 = self.critic_target(s2, a2)
-            q_target = r + (1.0 - done) * self.gamma * q2
+            q_target = r + self.gamma * q2 * (1 - done)
 
         q_pred = self.critic(s, a)
         critic_loss = nn.MSELoss()(q_pred, q_target)
@@ -178,6 +170,7 @@ class AggregatorAgentDDPG:
         critic_loss.backward()
         self.optim_critic.step()
 
+        # ---------------- Actor update ----------------
         a_pred = self.actor(s)
         actor_loss = -self.critic(s, a_pred).mean()
 
@@ -185,10 +178,7 @@ class AggregatorAgentDDPG:
         actor_loss.backward()
         self.optim_actor.step()
 
-        self._soft_update(self.actor_target, self.actor)
-        self._soft_update(self.critic_target, self.critic)
-
-        return float(actor_loss.item()), float(critic_loss.item())
+        return actor_loss.item(), critic_loss.item()
 
     # ========================================================================
     def get_reward(self, regional_demand):
@@ -217,8 +207,7 @@ class AggregatorAgentDDPG:
         if self.critic is not None:
             torch.save(self.critic.state_dict(), f"{path}/agg_critic_{self.id}_ep{episode}.pth")
 
-    # -------------------------
-    def load_models(self, path: str, episode: int):
+    def load_models(self, path, episode):
         try:
             actor_path = f"{path}/agg_actor_{self.id}_ep{episode}.pth"
             critic_path = f"{path}/agg_critic_{self.id}_ep{episode}.pth"
