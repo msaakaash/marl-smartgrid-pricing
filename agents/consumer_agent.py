@@ -54,7 +54,7 @@ class ConsumerAgentDQN:
         building_id: int,
         metadata: dict,
         action_space,
-        key_path: str = "security/keys/shared_key.bin",
+        key_path: str = "security/keys/secret.key",
         device: str = "cpu",
         replay_capacity: int = 50000,
         lr: float = 5e-4,
