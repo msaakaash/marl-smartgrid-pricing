@@ -97,13 +97,12 @@ If you don’t have a `requirements.txt` file, create it with the following cont
 citylearn==1.5.0
 numpy==1.21.6
 pandas==1.3.5
-scikit-learn==1.0.2
 torch==1.12.0
-torchvision==0.13.0
+scikit-learn==1.0.2
 gym==0.25.1
-gym-notices==0.0.8
-simplejson==3.17.6
-tqdm
+tqdm==4.66.1
+cryptography==41.0.3
+matplotlib==3.5.3
 ```
 
 ## Usage
