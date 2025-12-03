@@ -11,7 +11,7 @@ This project introduces a **Multi-Agent Reinforcement Learning (MARL)** framewor
 - **Reward optimization** for cost, comfort, and grid stability.  
 - **Performance evaluation** on peak load reduction, cost efficiency, and fairness.  
 - **Scalable and adaptive** system robust to non-participation and edge conditions.
- 
+- **Security** with  ChaCha20‑Poly1305 - a modern, fast, and authenticated encryption scheme.
 
 ## Tech Stack
 
@@ -35,7 +35,8 @@ This project introduces a **Multi-Agent Reinforcement Learning (MARL)** framewor
         NumPy, Pandas – Numerical computation and data processing<br>
         scikit-learn – Data preprocessing and utilities<br>
         Gym – Reinforcement learning environment interface<br>
-        tqdm – Progress visualization
+        tqdm – Progress visualization<br>
+        cryptography - Security 
       </td>
     </tr>
     <tr>
