@@ -1,42 +1,78 @@
 # main.py
-# ================================================================
-#   main.py  (FINAL – Secure MARL with ChaCha20-Poly1305)
-# ================================================================
-
 import os
 import json
 import random
-import re
-from typing import List, Mapping, Any, Union, Dict
-
 import numpy as np
 import pandas as pd
-import torch
 from tqdm import tqdm
+from typing import List, Mapping, Any, Union, Dict
 from citylearn.citylearn import CityLearnEnv
 from citylearn.building import Building
+import torch
+import re
 
-# --- IMPORT AGENTS ---
 from agents.consumer_agent import ConsumerAgentDQN
-
-try:
-    from agents.aggregator_agent import AggregatorAgentDDPG as AggregatorAgentImpl
-    AGGREGATOR_IS_DDPG = True
-    print("Successfully imported AggregatorAgentDDPG.")
-except ImportError as e:
-    print(f"CRITICAL: Could not import AggregatorAgentDDPG ({e}). Exiting.")
-    exit()
-
-
-# ================================================================
-#                   CONSTANTS AND HELPERS
-# ================================================================
+from agents.aggregator_agent import AggregatorAgentDDPG
 
 CSV_COLUMNS = [
     "episode", "time_step", "consumer_id", "consumer_type", "total_demand",
     "net_electricity_consumption", "soc_after_action", "agg_signal",
     "action", "reward"
 ]
+
+
+# ======================================================================
+#                     CONSUMER + AGGREGATOR BUILDERS
+# ======================================================================
+def build_consumers_from_env(env, building_obs_names, key_path="security/keys/secret.key"):
+    consumer_agents = []
+    consumer_metadata_map = {}
+
+    for i, building in enumerate(env.buildings):
+        metadata = {
+            "building_type": random.choice(["residential", "office", "mall", "hospital", "school"]),
+            "critical_load_fraction": random.uniform(0.1, 0.3),
+            "prime_hours": random.sample(range(8, 20), 3),
+            "cheating_propensity": random.uniform(0.0, 0.3),
+            "emergency_flag": False
+        }
+
+        agent = ConsumerAgentDQN(
+            building=building,
+            building_id=i,
+            metadata=metadata,
+            action_space=building.action_space,
+            key_path=key_path,
+            debug=True
+        )
+
+        agent.building_type = metadata["building_type"]
+        consumer_agents.append(agent)
+        consumer_metadata_map[i] = metadata
+
+    print(f"Built {len(consumer_agents)} consumer agents.")
+    return consumer_agents, consumer_metadata_map
+
+
+def build_aggregators(consumer_agents, key_path="security/keys/secret.key", debug=True):
+    aggregators = []
+    num_regions = max(1, (len(consumer_agents) + 4) // 5)
+    print(f"Building {num_regions} aggregator regions...")
+
+    for region_id in range(num_regions):
+        start = region_id * 5
+        end = start + 5
+        slice_cons = consumer_agents[start:end]
+
+        agg = AggregatorAgentDDPG(
+            region_id=region_id,
+            consumers=slice_cons,
+            key_path=key_path,
+            debug=debug
+        )
+        aggregators.append(agg)
+
+    return aggregators
 
 
 def save_json(obj, path):
@@ -50,96 +86,29 @@ def find_latest_checkpoint(directory):
         return 0
 
     pattern = re.compile(r'_ep(\d+)\.pth$')
+
     for f in os.listdir(directory):
         match = pattern.search(f)
         if match:
-            episode_num = int(match.group(1))
-            latest_episode = max(latest_episode, episode_num)
+            ep = int(match.group(1))
+            if ep > latest_episode:
+                latest_episode = ep
+
     return latest_episode
 
 
-# ================================================================
-#                BUILD CONSUMER AGENTS
-# ================================================================
-
-def build_consumers_from_env(env, building_obs_names):
-    consumer_agents = []
-    consumer_metadata_map = {}
-
-    for i, building in enumerate(env.buildings):
-
-        metadata = {
-            "building_type": random.choice(
-                ["residential", "office", "mall", "hospital", "school"]
-            ),
-            "critical_load_fraction": random.uniform(0.1, 0.3),
-            "prime_hours": random.sample(range(8, 20), 3),
-            "cheating_propensity": random.uniform(0.0, 0.3),
-            "emergency_flag": False
-        }
-
-        agent = ConsumerAgentDQN(
-            building=building,
-            building_id=i,
-            metadata=metadata,
-            action_space=building.action_space
-        )
-
-        consumer_agents.append(agent)
-        consumer_metadata_map[i] = metadata
-
-    print(f"Built {len(consumer_agents)} consumer agents.")
-    return consumer_agents, consumer_metadata_map
-
-
-# ================================================================
-#                BUILD AGGREGATOR AGENTS
-# ================================================================
-
-def build_aggregators(consumer_agents, use_ddpg=True):
-
-    aggregators = []
-    num_regions = max(1, (len(consumer_agents) + 4) // 5)
-
-    print(f"Building {num_regions} aggregator regions...")
-
-    for region_id in range(num_regions):
-        start = region_id * 5
-        end = start + 5
-        slice_group = consumer_agents[start:end]
-
-        if AGGREGATOR_IS_DDPG:
-            agg = AggregatorAgentImpl(region_id=region_id, consumers=slice_group)
-        else:
-            print("CRITICAL: Aggregator init failed.")
-            exit()
-
-        aggregators.append(agg)
-
-    return aggregators
-
-
-# ================================================================
-#              TRAINING AND SIMULATION PIPELINE
-# ================================================================
-
-def run_training_and_simulation(
-    schema_paths=None,
-    num_episodes=10,
-    use_ddpg_aggregator=True,
-    save_dir=".",
-    checkpoint_dir="checkpoints",
-    train_every_n_steps=4
-):
+# ======================================================================
+#                     MAIN TRAINING + SIMULATION LOOP
+# ======================================================================
+def run_training_and_simulation(schema_paths=None, num_episodes: int = 50,
+                                use_ddpg_aggregator: bool = True,
+                                save_dir: str = ".", checkpoint_dir: str = "checkpoints",
+                                train_every_n_steps: int = 4):
 
     if schema_paths is None:
-        schema_paths = [
-            "citylearn_challenge_2022_phase_1",
-            "citylearn_challenge_2022_phase_2",
-            "citylearn_challenge_2022_phase_3"
-        ]
+        schema_paths = ["citylearn_challenge_2022_phase_1"]
 
-    # ------------------------- LOAD ENVIRONMENT -------------------------
+    # Load a CityLearn env with max 15 buildings
     buildings = []
     building_obs_names = {}
 
@@ -152,7 +121,8 @@ def run_training_and_simulation(
 
             buildings.append(bld)
             obs_names = env_schema.observation_names[i]
-            if not isinstance(obs_names, list):
+
+            if not obs_names:
                 obs_names = [f"obs_{j}" for j in range(len(bld.observation_space.sample()))]
 
             building_obs_names[len(buildings) - 1] = obs_names
@@ -161,269 +131,260 @@ def run_training_and_simulation(
             break
 
     env = CityLearnEnv(schema=schema_paths[0], buildings=buildings)
-    print(f"Environment loaded with {len(env.buildings)} buildings.")
+    print(f"Environment loaded: {len(env.buildings)} buildings")
 
-    # ------------------------- AGENTS -------------------------
-    consumer_agents, consumer_metadata_map = build_consumers_from_env(env, building_obs_names)
-    aggregator_agents = build_aggregators(consumer_agents, use_ddpg_aggregator)
+    # Build agents
+    consumer_agents, metadata_map = build_consumers_from_env(env, building_obs_names)
+    aggregator_agents = build_aggregators(consumer_agents)
 
-    # ------------------------- SAVE PATHS -------------------------
+    # File output setup
     csv_path = os.path.join(save_dir, "sample.csv")
     json_path = os.path.join(save_dir, "sample.json")
     os.makedirs(checkpoint_dir, exist_ok=True)
 
-    # ------------------------- CHECKPOINTING -------------------------
     latest_episode = find_latest_checkpoint(checkpoint_dir)
     start_episode = latest_episode + 1 if latest_episode > 0 else 1
+
+    if latest_episode > 0:
+        print(f"Resuming from Episode {latest_episode}")
+        for c in consumer_agents:
+            c.load_models(checkpoint_dir, latest_episode)
+            c.epsilon = c.epsilon_min
+        for a in aggregator_agents:
+            a.load_models(checkpoint_dir, latest_episode)
 
     all_step_records = []
     all_episodes_summary = []
 
-    if latest_episode > 0:
-        print(f"Resuming from episode {latest_episode}")
-
-        # Load models
-        for c in consumer_agents:
-            c.load_models(checkpoint_dir, latest_episode)
-            c.epsilon = c.epsilon_min
-
-        for a in aggregator_agents:
-            a.load_models(checkpoint_dir, latest_episode)
-
-        # Load CSV/JSON data
-        try:
-            df_old = pd.read_csv(csv_path)
-            all_step_records = df_old.to_dict("records")
-        except Exception:
-            pass
-
-        try:
-            with open(json_path) as f:
-                summary_old = json.load(f)
-                all_episodes_summary = summary_old.get("episodes", [])
-        except Exception:
-            pass
-
-    # ================================================================
-    #                       MAIN TRAINING LOOP
-    # ================================================================
-
+    # ======================================================================
+    #                       EPISODE LOOP
+    # ======================================================================
     for episode in range(start_episode, num_episodes + 1):
-
-        current_episode_rows = []
 
         observations = env.reset()
         obs_dict = {i: observations[i] for i in range(len(observations))}
 
-        for c in consumer_agents:
-            c.reset_episode()
-
-        for agg in aggregator_agents:
-            agg.reset_episode()
-
-        last_agg_signals = {c.id: np.array([0.0, 0.0]) for c in consumer_agents}
+        for c in consumer_agents: c.reset_episode()
+        for a in aggregator_agents: a.reset_episode()
 
         print(f"\n==================  EPISODE {episode}  ==================")
 
-        # -----------------------------------------------------------
-        #                TIMESTEP LOOP
-        # -----------------------------------------------------------
+        current_episode_step_records = []
+        last_agg_signals_dict = {c.id: b"" for c in consumer_agents}
+        consumer_state_dict = {}
 
-        for t in tqdm(range(env.time_steps - 1), desc=f"Episode {episode}"):
+        episode_demands = []
+        consumer_stats = {c.id: {"reward_sum": 0, "steps": 0, "energy_sum": 0} for c in consumer_agents}
+        agg_stats = {a.id: {"reward_sum": 0, "steps": 0, "total_demand": 0} for a in aggregator_agents}
 
-            current_consumer_states = {}
+        # ==================================================================
+        #                          TIME STEP LOOP
+        # ==================================================================
+        for t in tqdm(range(env.time_steps - 1), desc=f"Episode {episode}", ncols=100):
 
-            # -------------------------------------------------------
-            # 1. Build consumer states
-            # -------------------------------------------------------
+            # --- 1. Consumers build state (using previous agg signal) ---
+            consumer_state_dict.clear()
+
             for c in consumer_agents:
-                state = c.get_observation(
-                    obs_dict[c.id],
-                    building_obs_names.get(c.id),
-                    last_agg_signals[c.id]
+                packet = last_agg_signals_dict[c.id]
+                agg_dec = c.decrypt_agg_packet(packet) if packet else np.array([0.0, 0.0], dtype=np.float32)
+                consumer_state_dict[c.id] = c.get_observation(
+                    obs_dict[c.id], building_obs_names[c.id], agg_signal=agg_dec
                 )
-                current_consumer_states[c.id] = state
 
-            # -------------------------------------------------------
-            # 2. Aggregators act → produce raw 10-dim vector
-            # -------------------------------------------------------
-            encrypted_packets_for_consumers = {}
+            # --- 2. Aggregators act → produce encrypted signals ---
+            current_agg_signals_dict = {}
 
             for agg in aggregator_agents:
+                cons_states = [consumer_state_dict[c.id] for c in agg.consumers]
+                agg_state = agg.get_observation(cons_states)
+                agg_action = agg.select_action(agg_state, noise_std=0.0)
+                encrypted_packets = agg.encrypt_signals_for_consumers(agg_action)
 
-                state_list = [current_consumer_states[c.id] for c in agg.consumers]
-                agg_state = agg.get_observation(state_list)
+                # -------------------------------------------------------
+                # 🔥 ATTACK SIMULATION (you can toggle this ON/OFF)
+                # -------------------------------------------------------
+                ATTACK_ENABLED = True
+                ATTACK_MODE = "flip"       # flip | noise | replace
+                ATTACK_INTENSITY = 0.6     # 0–1 fraction of bytes
 
-                raw_action_10dim = agg.select_action(agg_state)
-                agg.last_state = agg_state
-                agg.last_actions = raw_action_10dim
+                for cid, pkt in encrypted_packets.items():
+                    if ATTACK_ENABLED:
+                        print(f"[⚠️ ATTACK] Tampering packet → C{cid}")
+                        tampered = agg.secure.attacker_tamper(
+                            pkt,
+                            mode=ATTACK_MODE,
+                            intensity=ATTACK_INTENSITY
+                        )
+                        current_agg_signals_dict[cid] = tampered
+                    else:
+                        current_agg_signals_dict[cid] = pkt
 
-                # SECURE PHASE → encryption for each consumer
-                encrypted_packets = agg.encrypt_signals_for_consumers(raw_action_10dim)
-
-                for cid, packet in encrypted_packets.items():
-                    encrypted_packets_for_consumers[cid] = packet
-
-            # -------------------------------------------------------
-            # 3. Consumers decrypt + act
-            # -------------------------------------------------------
+            # --- 3. Consumers act (decrypt the attack) ---
             all_actions = []
-            consumer_actions_scalar = {}
-
             for c in consumer_agents:
-
-                # Decrypt the targeted signal
-                decrypted_signal = c.decrypt_signal(encrypted_packets_for_consumers[c.id])
-
-                state = c.get_observation(
-                    obs_dict[c.id],
-                    building_obs_names.get(c.id),
-                    decrypted_signal
-                )
-
-                action_value, _ = c.select_action(state)
-                action_scalar = float(action_value.item())
-
+                dec = c.decrypt_agg_packet(current_agg_signals_dict[c.id])
+                obs_new = c.get_observation(obs_dict[c.id], building_obs_names[c.id], agg_signal=dec)
+                action_val, action_idx = c.select_action(obs_new)
+                action_scalar = float(np.atleast_1d(action_val)[0])
                 all_actions.append([action_scalar])
-                consumer_actions_scalar[c.id] = action_scalar
-                last_agg_signals[c.id] = decrypted_signal
 
-            # -------------------------------------------------------
-            # 4. Environment step
-            # -------------------------------------------------------
-            next_obs, raw_rewards, done, info = env.step(all_actions)
+            # --- 4. Env step ---
+            next_obs, raw_rewards, done, _ = env.step(all_actions)
             next_obs_dict = {i: next_obs[i] for i in range(len(next_obs))}
+            demand_now = sum(b.net_electricity_consumption[-1] for b in env.buildings)
+            episode_demands.append(demand_now)
 
-            # -------------------------------------------------------
-            # 5. Consumer Learning
-            # -------------------------------------------------------
-            action_idx = 0
+            # --- 5. Consumer Learning ---
+            idx = 0
             for agg in aggregator_agents:
                 for c in agg.consumers:
 
+                    soc_before = float(c.building.electrical_storage.soc[-1])
+                    price = float(obs_dict[c.id][10]) if len(obs_dict[c.id]) > 10 else 0.0
+
+                    decrypted = c.decrypt_agg_packet(current_agg_signals_dict[c.id])
+                    next_state = c.get_observation(next_obs_dict[c.id], building_obs_names[c.id], agg_signal=decrypted)
+
+                    act_scalar = float(np.atleast_1d(all_actions[idx])[0])
+                    raw_reward = raw_rewards[idx]
+
                     reward_custom = c.get_reward(
-                        raw_rewards[action_idx],
+                        raw_reward,
                         c.building.net_electricity_consumption[-1],
-                        consumer_actions_scalar[c.id],
-                        float(c.building.electrical_storage.soc[-1])
-                        if len(c.building.electrical_storage.soc) else 0.0,
-                        float(obs_dict[c.id][10]) if len(obs_dict[c.id]) > 10 else 0.0,
-                        last_agg_signals[c.id]
+                        act_scalar,
+                        soc_before,
+                        price,
+                        decrypted
                     )
 
-                    next_state = c.get_observation(
-                        next_obs_dict[c.id],
-                        building_obs_names.get(c.id),
-                        last_agg_signals[c.id]
-                    )
-
-                    c.store_experience(c.last_state, c.last_action_index,
-                                       reward_custom, next_state, done)
+                    c.store_experience(c.last_state, c.last_action_index, reward_custom, next_state, float(done))
 
                     if t % train_every_n_steps == 0:
                         c.learn()
 
-                    row = {
+                    # Logging
+                    consumer_stats[c.id]["reward_sum"] += float(reward_custom)
+                    consumer_stats[c.id]["steps"] += 1
+                    consumer_stats[c.id]["energy_sum"] += float(c.building.net_electricity_consumption[-1])
+
+                    record = {
                         "episode": episode,
                         "time_step": t,
                         "consumer_id": c.id,
-                        "consumer_type": c.building_type,
-                        "total_demand": float(sum(b.net_electricity_consumption[-1] for b in env.buildings)),
+                        "consumer_type": metadata_map[c.id]["building_type"],
+                        "total_demand": float(demand_now),
                         "net_electricity_consumption": float(c.building.net_electricity_consumption[-1]),
-                        "soc_after_action": float(c.building.electrical_storage.soc[-1])
-                        if len(c.building.electrical_storage.soc) else 0.0,
-                        "agg_signal": last_agg_signals[c.id].tolist(),
-                        "action": consumer_actions_scalar[c.id],
-                        "reward": float(reward_custom),
+                        "soc_after_action": soc_before,
+                        "agg_signal": decrypted.tolist(),
+                        "action": act_scalar,
+                        "reward": float(reward_custom)
                     }
-                    current_episode_rows.append(row)
+                    current_episode_step_records.append(record)
+                    idx += 1
 
-                    action_idx += 1
-
-            # -------------------------------------------------------
-            # 6. Aggregator Learning
-            # -------------------------------------------------------
+            # --- 6. Aggregator Learning ---
             regional_demands = []
             for agg in aggregator_agents:
-                regional_demands.append(sum(c.building.net_electricity_consumption[-1]
-                                            for c in agg.consumers))
+                reg_demand = sum(c.building.net_electricity_consumption[-1] for c in agg.consumers)
+                regional_demands.append(reg_demand)
 
-            for idx, agg in enumerate(aggregator_agents):
-
-                r = agg.get_reward([regional_demands[idx]])
-
-                # Build next aggregator state
-                next_states_list = []
-                for c in agg.consumers:
-                    next_states_list.append(
-                        c.get_observation(
-                            next_obs_dict[c.id],
-                            building_obs_names.get(c.id),
-                            last_agg_signals[c.id]
-                        )
-                    )
-                next_agg_state = agg.get_observation(next_states_list)
-
-                agg.store_experience(
-                    agg.last_state,
-                    agg.last_actions,
-                    [consumer_actions_scalar[c.id] for c in agg.consumers],
-                    r,
-                    next_agg_state,
-                    done
-                )
+            for ai, agg in enumerate(aggregator_agents):
+                reward_agg = agg.get_reward([regional_demands[ai]])
+                agg_stats[agg.id]["reward_sum"] += float(reward_agg)
+                agg_stats[agg.id]["steps"] += 1
+                agg_stats[agg.id]["total_demand"] += float(regional_demands[ai])
 
                 if t % train_every_n_steps == 0:
-                    next_c_actions_batch = np.array(
-                        [[consumer_actions_scalar[c.id] for c in agg.consumers]]
-                        * agg.batch_size
-                    )
-                    next_c_actions_batch = torch.tensor(
-                        next_c_actions_batch, dtype=torch.float32, device=agg.device
-                    )
-                    agg.learn(next_c_actions_batch)
+                    next_states = []
+                    for c in agg.consumers:
+                        dec = c.decrypt_agg_packet(current_agg_signals_dict[c.id])
+                        next_states.append(
+                            c.get_observation(next_obs_dict[c.id], building_obs_names[c.id], agg_signal=dec)
+                        )
+                    next_agg_state = agg.get_observation(next_states)
 
+                    last_actions_list = [float(np.atleast_1d(a)[0]) for a in all_actions]
+                    agg.store_experience(agg.last_state, agg.last_actions, last_actions_list, reward_agg, next_agg_state, float(done))
+                    agg.learn()
+
+            # Update transition
             obs_dict = next_obs_dict
+            last_agg_signals_dict = current_agg_signals_dict
 
-        # ================================================================
-        #                   END OF EPISODE
-        # ================================================================
+        # ==================================================================
+        #                       END OF EPISODE
+        # ==================================================================
+        total_energy = sum(episode_demands)
+        total_reward = sum(v["reward_sum"] for v in consumer_stats.values())
 
-        all_step_records.extend(current_episode_rows)
+        episode_summary = {
+            "episode": episode,
+            "total_energy": float(total_energy),
+            "total_reward": float(total_reward),
+            "consumers": [],
+            "aggregators": []
+        }
 
-        # ----- SAVE MODELS -----
-        print(f"\nSaving models for episode {episode}")
+        for cid, st in consumer_stats.items():
+            avg_r = st["reward_sum"] / st["steps"]
+            avg_e = st["energy_sum"] / st["steps"]
+            episode_summary["consumers"].append({
+                "consumer_id": cid,
+                "building_type": metadata_map[cid]["building_type"],
+                "avg_reward": float(avg_r),
+                "avg_energy": float(avg_e)
+            })
+
+        for aid, st in agg_stats.items():
+            avg_r = st["reward_sum"] / st["steps"]
+            avg_d = st["total_demand"] / st["steps"]
+            episode_summary["aggregators"].append({
+                "aggregator_id": aid,
+                "avg_reward": float(avg_r),
+                "avg_demand": float(avg_d)
+            })
+
+        all_episodes_summary.append(episode_summary)
+        all_step_records.extend(current_episode_step_records)
+
+        # Save models
+        print(f"\n--- Saving Checkpoint EP{episode} ---")
         for c in consumer_agents:
             c.save_models(checkpoint_dir, episode)
-        for agg in aggregator_agents:
-            agg.save_models(checkpoint_dir, episode)
+        for a in aggregator_agents:
+            a.save_models(checkpoint_dir, episode)
 
-        # ----- SAVE CSV -----
+        # Save CSV/JSON
         df = pd.DataFrame(all_step_records)
         df = df.reindex(columns=CSV_COLUMNS)
         df.to_csv(csv_path, index=False)
 
-        # ----- SAVE JSON -----
-        all_episodes_summary.append({"episode": episode})
         save_json({"episodes": all_episodes_summary}, json_path)
+        print(f"Saved {csv_path} & {json_path}")
 
-        print(f"Episode {episode} saved.\n")
+        # Delete old checkpoint
+        if episode > 1:
+            old = episode - 1
+            for f in os.listdir(checkpoint_dir):
+                if f.endswith(f"_ep{old}.pth"):
+                    os.remove(os.path.join(checkpoint_dir, f))
 
-    print("\n***** TRAINING COMPLETE *****")
-    print(f"Results saved to {csv_path} and {json_path}")
+        print(f"Episode {episode} Summary → "
+              f"Energy={total_energy:.2f}, Reward={total_reward:.2f}")
+
+    print("\nTraining Completed.")
 
 
-# ================================================================
-#                            MAIN CALL
-# ================================================================
-
+# ======================================================================
+#                              MAIN ENTRY
+# ======================================================================
 if __name__ == "__main__":
     random.seed(0)
     np.random.seed(0)
     torch.manual_seed(0)
 
     run_training_and_simulation(
-        num_episodes=2,
-        use_ddpg_aggregator=True,
+        num_episodes=1,     # change number of episodes here
         train_every_n_steps=4
     )
