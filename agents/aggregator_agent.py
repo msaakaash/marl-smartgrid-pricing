@@ -131,7 +131,7 @@ class AggregatorAgentDDPG:
 
         s = torch.tensor(state_vec, dtype=torch.float32, device=self.device).unsqueeze(0)
         with torch.no_grad():
-            action = self.actor(s).cpu().numpy()[0]
+            action = self.actor(s).detach().cpu().tolist()[0]
         return action
 
     # ========================================================================
