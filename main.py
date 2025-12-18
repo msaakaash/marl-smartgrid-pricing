@@ -205,12 +205,12 @@ def run_training_and_simulation(schema_paths=None, num_episodes: int = 50,
                 # 🔥 ATTACK SIMULATION (you can toggle this ON/OFF)
                 # -------------------------------------------------------
                 ATTACK_ENABLED = True
-                ATTACK_MODE = "flip"       # flip | noise | replace
-                ATTACK_INTENSITY = 0.6     # 0–1 fraction of bytes
+                ATTACK_MODE = random.choice(["replay", "delay","flip","noise","replace"])
+                ATTACK_INTENSITY = 0.6   # used only for flip/noise
 
                 for cid, pkt in encrypted_packets.items():
                     if ATTACK_ENABLED:
-                        print(f"[⚠️ ATTACK] Tampering packet → C{cid}")
+                        print(f"[⚠️ ATTACK] {ATTACK_MODE.upper()} → Consumer {cid}")
                         tampered = agg.secure.attacker_tamper(
                             pkt,
                             mode=ATTACK_MODE,
@@ -219,6 +219,7 @@ def run_training_and_simulation(schema_paths=None, num_episodes: int = 50,
                         current_agg_signals_dict[cid] = tampered
                     else:
                         current_agg_signals_dict[cid] = pkt
+
 
             # --- 3. Consumers act (decrypt the attack) ---
             all_actions = []

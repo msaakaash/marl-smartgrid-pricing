@@ -1,14 +1,24 @@
 # security/secure_channel.py
+
 import os
+import time
+import random
 import binascii
 import numpy as np
+from collections import deque
 from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
 
 
 class SecureChannel:
     """
     ChaCha20-Poly1305 authenticated encryption.
-    Packet = NONCE(12 bytes) || CIPHERTEXT+TAG.
+    Packet format:
+        [ NONCE (12 bytes) | CIPHERTEXT + AUTH TAG ]
+
+    Includes attack simulation:
+        - replay
+        - delay
+        - flip / noise / replace (existing)
     """
 
     def __init__(self, key_path="security/keys/secret.key", debug=True):
@@ -24,11 +34,14 @@ class SecureChannel:
         self.aead = ChaCha20Poly1305(self.key)
         self.debug = debug
 
+        # buffer for replay attack
+        self.replay_buffer = deque(maxlen=50)
+
     # ============================================================
     #                           ENCRYPT
     # ============================================================
     def encrypt(self, vec: np.ndarray) -> bytes:
-        """Encrypt float32 vector and SHOW PT/CT clearly."""
+        """Encrypt float32 vector."""
         try:
             vec = np.asarray(vec, dtype=np.float32)
             plaintext = vec.tobytes()
@@ -38,15 +51,14 @@ class SecureChannel:
             packet = nonce + ciphertext
 
             if self.debug:
-                hex_nonce = binascii.hexlify(nonce).decode()
-                hex_ct = binascii.hexlify(ciphertext).decode()
-
                 print("\n================= ENCRYPT =================")
-                print(f"Plaintext (PT):     {vec.tolist()}")
-                print(f"Nonce (hex):        {hex_nonce}")
+                print(f"Plaintext:          {vec.tolist()}")
+                print(f"Nonce (hex):        {binascii.hexlify(nonce).decode()}")
                 print(f"Ciphertext length:  {len(ciphertext)} bytes")
-                print(f"Ciphertext (CT):    {hex_ct[:80]}...")  # truncated for readability
                 print("===========================================\n")
+
+            # store packet for replay attack
+            self.replay_buffer.append(packet)
 
             return packet
 
@@ -59,10 +71,10 @@ class SecureChannel:
     #                           DECRYPT
     # ============================================================
     def decrypt(self, packet: bytes) -> np.ndarray:
-        """Decrypt packet and show PT/CT. If auth fails → safe vector."""
+        """Decrypt packet. If auth fails → return safe vector."""
         try:
             if len(packet) < 13:
-                raise ValueError("Packet too short.")
+                raise ValueError("Packet too short")
 
             nonce = packet[:12]
             ciphertext = packet[12:]
@@ -71,74 +83,96 @@ class SecureChannel:
             arr = np.frombuffer(plaintext, dtype=np.float32)
 
             if self.debug:
-                hex_nonce = binascii.hexlify(nonce).decode()
-                hex_ct = binascii.hexlify(ciphertext).decode()
-
                 print("\n================= DECRYPT =================")
-                print(f"Nonce (hex):        {hex_nonce}")
-                print(f"Ciphertext (CT):    {hex_ct[:80]}...")
+                print(f"Nonce (hex):        {binascii.hexlify(nonce).decode()}")
                 print(f"Recovered PT:       {arr.tolist()}")
                 print("Auth:               VALID ✓")
                 print("===========================================\n")
 
             return arr
 
-        except Exception as e:
+        except Exception:
             if self.debug:
-                nonce = packet[:12] if len(packet) >= 12 else b""
-                hex_nonce = binascii.hexlify(nonce).decode() if nonce else "N/A"
-                ct = packet[12:] if len(packet) > 12 else b""
-                hex_ct = binascii.hexlify(ct).decode() if ct else "N/A"
-
                 print("\n================= DECRYPT =================")
-                print(f"Nonce (hex):        {hex_nonce}")
-                print(f"Ciphertext (CT):    {hex_ct[:80]}...")
-                print("Auth:               FAILED ✗ (Tampered or corrupted!)")
+                print("Auth:               FAILED ✗ (Tampered or stale)")
                 print("Returning SAFE PT:  [0.0, 0.0]")
                 print("===========================================\n")
 
             return np.array([0.0, 0.0], dtype=np.float32)
 
     # ============================================================
-    #                   ATTACK SIMULATOR (FDI)
+    #                   ATTACK SIMULATOR
     # ============================================================
     def attacker_tamper(self, packet: bytes, mode="flip", intensity=0.10):
         """
-        Simulate cyberattacks:
-        - flip: invert bits
-        - noise: random byte values
-        - replace: overwrite entire ciphertext
+        Attack modes:
+            - replay  : resend old valid packet
+            - delay   : delay packet delivery
+            - flip    : bit-flip
+            - noise   : random byte corruption
+            - replace : replace ciphertext
         """
+
         if not isinstance(packet, (bytes, bytearray)):
-            raise ValueError("attacker_tamper: expected bytes")
+            raise ValueError("attacker_tamper expects bytes")
 
         packet = bytearray(packet)
-        tamper_bytes = max(1, int(len(packet) * intensity))
 
-        if mode == "flip":
+        # ===================== REPLAY ATTACK =====================
+        if mode == "replay":
+            if len(self.replay_buffer) == 0:
+                return bytes(packet)
+
+            replayed = random.choice(list(self.replay_buffer))
+
+            if self.debug:
+                print("\n================= ATTACK =================")
+                print("Mode:               REPLAY")
+                print("Replaying old valid encrypted packet")
+                print("===========================================\n")
+
+            return replayed
+
+        # ===================== DELAY ATTACK ======================
+        elif mode == "delay":
+            delay_time = random.uniform(0.2, 1.0)
+            time.sleep(delay_time)
+
+            if self.debug:
+                print("\n================= ATTACK =================")
+                print("Mode:               DELAY")
+                print(f"Delay applied:      {delay_time:.2f} seconds")
+                print("===========================================\n")
+
+            return bytes(packet)
+
+        # ===================== BIT FLIP ==========================
+        elif mode == "flip":
+            tamper_bytes = max(1, int(len(packet) * intensity))
             for _ in range(tamper_bytes):
-                idx = np.random.randint(0, len(packet))
+                idx = random.randint(0, len(packet) - 1)
                 packet[idx] ^= 0xFF
 
+        # ===================== NOISE =============================
         elif mode == "noise":
+            tamper_bytes = max(1, int(len(packet) * intensity))
             for _ in range(tamper_bytes):
-                idx = np.random.randint(0, len(packet))
-                packet[idx] = np.random.randint(0, 256)
+                idx = random.randint(0, len(packet) - 1)
+                packet[idx] = random.randint(0, 255)
 
+        # ===================== REPLACE ===========================
         elif mode == "replace":
             nonce = packet[:12]
             cipher = os.urandom(len(packet) - 12)
             packet = nonce + cipher
-            tamper_bytes = len(cipher)
 
         else:
             raise ValueError(f"Unknown attack mode: {mode}")
 
         if self.debug:
             print("\n================= ATTACK =================")
-            print(f"Mode:               {mode}")
-            print(f"Intensity:          {intensity}")
-            print(f"Tampered bytes:     {tamper_bytes}")
+            print(f"Mode:               {mode.upper()}")
+            print("Packet was tampered")
             print("===========================================\n")
 
         return bytes(packet)
