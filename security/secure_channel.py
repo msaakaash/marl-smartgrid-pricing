@@ -82,7 +82,7 @@ class SecureChannel:
             return random.choice(self.replay_buffer)
 
         if mode == "delay":
-            time.sleep(random.uniform(0.2, 1.0))
+            time.sleep(random.uniform(0.005, 0.02))
             return bytes(pkt)
 
         if mode == "flip":
