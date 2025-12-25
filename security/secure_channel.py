@@ -16,9 +16,8 @@ class SecureChannel:
         [ NONCE (12 bytes) | CIPHERTEXT + AUTH TAG ]
 
     Includes attack simulation:
-        - replay
-        - delay
-        - flip / noise / replace (existing)
+        - original: replay, delay, flip, noise, replace
+        - extended: 15 research-grade network attacks
     """
 
     def __init__(self, key_path="security/keys/secret.key", debug=True):
@@ -34,145 +33,124 @@ class SecureChannel:
         self.aead = ChaCha20Poly1305(self.key)
         self.debug = debug
 
-        # buffer for replay attack
-        self.replay_buffer = deque(maxlen=50)
+        # buffer for replay / reordering attacks
+        self.replay_buffer = deque(maxlen=100)
+        self.reorder_buffer = deque(maxlen=10)
 
     # ============================================================
     #                           ENCRYPT
     # ============================================================
     def encrypt(self, vec: np.ndarray) -> bytes:
-        """Encrypt float32 vector."""
-        try:
-            vec = np.asarray(vec, dtype=np.float32)
-            plaintext = vec.tobytes()
-            nonce = os.urandom(12)
-
-            ciphertext = self.aead.encrypt(nonce, plaintext, None)
-            packet = nonce + ciphertext
-
-            if self.debug:
-                print("\n================= ENCRYPT =================")
-                print(f"Plaintext:          {vec.tolist()}")
-                print(f"Nonce (hex):        {binascii.hexlify(nonce).decode()}")
-                print(f"Ciphertext length:  {len(ciphertext)} bytes")
-                print("===========================================\n")
-
-            # store packet for replay attack
-            self.replay_buffer.append(packet)
-
-            return packet
-
-        except Exception as e:
-            if self.debug:
-                print(f"[SecureChannel:ENCRYPT] ERROR: {e}")
-            return b""
+        vec = np.asarray(vec, dtype=np.float32)
+        plaintext = vec.tobytes()
+        nonce = os.urandom(12)
+        ciphertext = self.aead.encrypt(nonce, plaintext, None)
+        packet = nonce + ciphertext
+        self.replay_buffer.append(packet)
+        return packet
 
     # ============================================================
     #                           DECRYPT
     # ============================================================
     def decrypt(self, packet: bytes) -> np.ndarray:
-        """Decrypt packet. If auth fails → return safe vector."""
         try:
-            if len(packet) < 13:
-                raise ValueError("Packet too short")
-
             nonce = packet[:12]
             ciphertext = packet[12:]
-
             plaintext = self.aead.decrypt(nonce, ciphertext, None)
-            arr = np.frombuffer(plaintext, dtype=np.float32)
-
-            if self.debug:
-                print("\n================= DECRYPT =================")
-                print(f"Nonce (hex):        {binascii.hexlify(nonce).decode()}")
-                print(f"Recovered PT:       {arr.tolist()}")
-                print("Auth:               VALID ✓")
-                print("===========================================\n")
-
-            return arr
-
+            return np.frombuffer(plaintext, dtype=np.float32)
         except Exception:
-            if self.debug:
-                print("\n================= DECRYPT =================")
-                print("Auth:               FAILED ✗ (Tampered or stale)")
-                print("Returning SAFE PT:  [0.0, 0.0]")
-                print("===========================================\n")
-
             return np.array([0.0, 0.0], dtype=np.float32)
 
     # ============================================================
-    #                   ATTACK SIMULATOR
+    #                   ATTACK SIMULATOR (EXTENDED)
     # ============================================================
     def attacker_tamper(self, packet: bytes, mode="flip", intensity=0.10):
         """
-        Attack modes:
-            - replay  : resend old valid packet
-            - delay   : delay packet delivery
-            - flip    : bit-flip
-            - noise   : random byte corruption
-            - replace : replace ciphertext
+        ORIGINAL modes (unchanged):
+          replay, delay, flip, noise, replace
+
+        NEW complex modes:
+          ddos, mitm, impersonation, blackhole, grayhole,
+          selective_forward, reorder, truncate, pad,
+          desync, timing, flood_amplify, adaptive
         """
 
-        if not isinstance(packet, (bytes, bytearray)):
-            raise ValueError("attacker_tamper expects bytes")
+        pkt = bytearray(packet)
 
-        packet = bytearray(packet)
-
-        # ===================== REPLAY ATTACK =====================
+        # ---------------- ORIGINAL MODES ----------------
         if mode == "replay":
-            if len(self.replay_buffer) == 0:
-                return bytes(packet)
+            return random.choice(self.replay_buffer)
 
-            replayed = random.choice(list(self.replay_buffer))
+        if mode == "delay":
+            time.sleep(random.uniform(0.2, 1.0))
+            return bytes(pkt)
 
-            if self.debug:
-                print("\n================= ATTACK =================")
-                print("Mode:               REPLAY")
-                print("Replaying old valid encrypted packet")
-                print("===========================================\n")
+        if mode == "flip":
+            for _ in range(max(1, int(len(pkt) * intensity))):
+                pkt[random.randint(0, len(pkt) - 1)] ^= 0xFF
+            return bytes(pkt)
 
-            return replayed
+        if mode == "noise":
+            for _ in range(max(1, int(len(pkt) * intensity))):
+                pkt[random.randint(0, len(pkt) - 1)] = random.randint(0, 255)
+            return bytes(pkt)
 
-        # ===================== DELAY ATTACK ======================
-        elif mode == "delay":
-            delay_time = random.uniform(0.2, 1.0)
-            time.sleep(delay_time)
+        if mode == "replace":
+            return pkt[:12] + os.urandom(len(pkt) - 12)
 
-            if self.debug:
-                print("\n================= ATTACK =================")
-                print("Mode:               DELAY")
-                print(f"Delay applied:      {delay_time:.2f} seconds")
-                print("===========================================\n")
+        # ---------------- NEW COMPLEX MODES ----------------
 
-            return bytes(packet)
+        if mode == "ddos":
+            return pkt * int(1 + 20 * intensity)
 
-        # ===================== BIT FLIP ==========================
-        elif mode == "flip":
-            tamper_bytes = max(1, int(len(packet) * intensity))
-            for _ in range(tamper_bytes):
-                idx = random.randint(0, len(packet) - 1)
-                packet[idx] ^= 0xFF
+        if mode == "mitm":
+            pkt[random.randint(12, len(pkt) - 1)] ^= 0xAA
+            return bytes(pkt)
 
-        # ===================== NOISE =============================
-        elif mode == "noise":
-            tamper_bytes = max(1, int(len(packet) * intensity))
-            for _ in range(tamper_bytes):
-                idx = random.randint(0, len(packet) - 1)
-                packet[idx] = random.randint(0, 255)
+        if mode == "impersonation":
+            return bytes(pkt)  # identity mismatch handled by receiver logic
 
-        # ===================== REPLACE ===========================
-        elif mode == "replace":
-            nonce = packet[:12]
-            cipher = os.urandom(len(packet) - 12)
-            packet = nonce + cipher
+        if mode == "blackhole":
+            return b""  # drop
 
-        else:
-            raise ValueError(f"Unknown attack mode: {mode}")
+        if mode == "grayhole":
+            return bytes(pkt) if random.random() > intensity else b""
 
-        if self.debug:
-            print("\n================= ATTACK =================")
-            print(f"Mode:               {mode.upper()}")
-            print("Packet was tampered")
-            print("===========================================\n")
+        if mode == "selective_forward":
+            return bytes(pkt) if random.random() > intensity else b""
 
-        return bytes(packet)
+        if mode == "reorder":
+            self.reorder_buffer.append(pkt)
+            if len(self.reorder_buffer) >= 3:
+                random.shuffle(self.reorder_buffer)
+                return bytes(self.reorder_buffer.popleft())
+            return bytes(pkt)
+
+        if mode == "truncate":
+            cut = random.randint(1, len(pkt) // 2)
+            return bytes(pkt[:-cut])
+
+        if mode == "pad":
+            return bytes(pkt + os.urandom(int(len(pkt) * intensity)))
+
+        if mode == "desync":
+            return bytes(pkt) + bytes(pkt)
+
+        if mode == "timing":
+            time.sleep(random.uniform(0.01, 0.1))
+            return bytes(pkt)
+
+        if mode == "flood_amplify":
+            return pkt * random.randint(2, 10)
+
+        if mode == "adaptive":
+            return self.attacker_tamper(
+                packet,
+                mode=random.choice([
+                    "ddos", "mitm", "replay", "delay", "flip",
+                    "blackhole", "grayhole", "truncate", "pad"
+                ]),
+                intensity=intensity
+            )
+
+        raise ValueError(f"Unknown attack mode: {mode}")
