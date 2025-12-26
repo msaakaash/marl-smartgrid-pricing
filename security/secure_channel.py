@@ -1,9 +1,8 @@
-# security/secure_channel.py
+# ======================= security/secure_channel.py =======================
 
 import os
 import time
 import random
-import binascii
 import numpy as np
 from collections import deque
 from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
@@ -11,16 +10,20 @@ from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
 
 class SecureChannel:
     """
-    ChaCha20-Poly1305 authenticated encryption.
+    ChaCha20-Poly1305 authenticated encryption for MARL smart grid control signals.
+
     Packet format:
         [ NONCE (12 bytes) | CIPHERTEXT + AUTH TAG ]
 
-    Includes attack simulation:
-        - original: replay, delay, flip, noise, replace
-        - extended: 15 research-grade network attacks
+    Supports explicit cyber-attack simulation for robustness evaluation.
     """
 
-    def __init__(self, key_path="security/keys/secret.key", debug=True):
+    def __init__(
+        self,
+        key_path="security/keys/secret.key",
+        metrics=None,
+        debug=False
+    ):
         if not os.path.exists(key_path):
             raise FileNotFoundError(f"[SecureChannel] Key file not found: {key_path}")
 
@@ -33,7 +36,10 @@ class SecureChannel:
         self.aead = ChaCha20Poly1305(self.key)
         self.debug = debug
 
-        # buffer for replay / reordering attacks
+        # Optional metrics collector (SmartGridSecurityMetrics)
+        self.metrics = metrics
+
+        # Buffers for replay / reorder attacks
         self.replay_buffer = deque(maxlen=100)
         self.reorder_buffer = deque(maxlen=10)
 
@@ -44,45 +50,63 @@ class SecureChannel:
         vec = np.asarray(vec, dtype=np.float32)
         plaintext = vec.tobytes()
         nonce = os.urandom(12)
+
         ciphertext = self.aead.encrypt(nonce, plaintext, None)
         packet = nonce + ciphertext
+
         self.replay_buffer.append(packet)
+
+        if self.metrics:
+            self.metrics.record_send()
+
         return packet
 
     # ============================================================
     #                           DECRYPT
     # ============================================================
     def decrypt(self, packet: bytes) -> np.ndarray:
+        start = time.time()
+
         try:
             nonce = packet[:12]
             ciphertext = packet[12:]
             plaintext = self.aead.decrypt(nonce, ciphertext, None)
+
+            delay = time.time() - start
+            if self.metrics:
+                self.metrics.record_receive(success=True, delay=delay)
+
             return np.frombuffer(plaintext, dtype=np.float32)
+
         except Exception:
+            # Authentication failure or malformed packet
+            if self.metrics:
+                self.metrics.record_receive(success=False, delay=0.0)
+
+            # Safe fallback (prevents agent crash)
             return np.array([0.0, 0.0], dtype=np.float32)
 
     # ============================================================
-    #                   ATTACK SIMULATOR (EXTENDED)
+    #                   ATTACK SIMULATOR
     # ============================================================
-    def attacker_tamper(self, packet: bytes, mode="flip", intensity=0.10):
+    def attacker_tamper(self, packet: bytes, mode="flip", intensity=0.1):
         """
-        ORIGINAL modes (unchanged):
-          replay, delay, flip, noise, replace
-
-        NEW complex modes:
-          ddos, mitm, impersonation, blackhole, grayhole,
-          selective_forward, reorder, truncate, pad,
-          desync, timing, flood_amplify, adaptive
+        Supported attacks:
+        - replay, delay, flip, noise, replace
+        - ddos, mitm, impersonation, blackhole, grayhole
+        - selective_forward, reorder, truncate, pad
+        - desync, timing, flood_amplify, adaptive
         """
 
         pkt = bytearray(packet)
 
-        # ---------------- ORIGINAL MODES ----------------
+        # ---------------- BASIC ATTACKS ----------------
+
         if mode == "replay":
             return random.choice(self.replay_buffer)
 
         if mode == "delay":
-            time.sleep(random.uniform(0.005, 0.02))
+            time.sleep(random.uniform(0.005, 0.02))  # realistic delay
             return bytes(pkt)
 
         if mode == "flip":
@@ -98,20 +122,20 @@ class SecureChannel:
         if mode == "replace":
             return pkt[:12] + os.urandom(len(pkt) - 12)
 
-        # ---------------- NEW COMPLEX MODES ----------------
+        # ---------------- NETWORK-LIKE ATTACKS ----------------
 
         if mode == "ddos":
-            return pkt * int(1 + 20 * intensity)
+            return pkt * int(1 + 10 * intensity)
 
         if mode == "mitm":
             pkt[random.randint(12, len(pkt) - 1)] ^= 0xAA
             return bytes(pkt)
 
         if mode == "impersonation":
-            return bytes(pkt)  # identity mismatch handled by receiver logic
+            return bytes(pkt)
 
         if mode == "blackhole":
-            return b""  # drop
+            return b""
 
         if mode == "grayhole":
             return bytes(pkt) if random.random() > intensity else b""
@@ -137,18 +161,19 @@ class SecureChannel:
             return bytes(pkt) + bytes(pkt)
 
         if mode == "timing":
-            time.sleep(random.uniform(0.01, 0.1))
+            time.sleep(random.uniform(0.01, 0.05))
             return bytes(pkt)
 
         if mode == "flood_amplify":
-            return pkt * random.randint(2, 10)
+            return pkt * random.randint(2, 5)
 
         if mode == "adaptive":
             return self.attacker_tamper(
                 packet,
                 mode=random.choice([
-                    "ddos", "mitm", "replay", "delay", "flip",
-                    "blackhole", "grayhole", "truncate", "pad"
+                    "ddos", "mitm", "replay", "delay",
+                    "flip", "blackhole", "grayhole",
+                    "truncate", "pad"
                 ]),
                 intensity=intensity
             )

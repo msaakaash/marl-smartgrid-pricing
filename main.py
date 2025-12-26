@@ -1,7 +1,7 @@
+# ============================== main.py ==============================
+
 import os
-import json
 import random
-import time
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
@@ -11,7 +11,7 @@ import torch
 
 from agents.consumer_agent import ConsumerAgentDQN
 from agents.aggregator_agent import AggregatorAgentDDPG
-from security.metrics import NetworkMetrics
+from security.metrics import SmartGridSecurityMetrics
 
 # ==========================================================
 #                     ATTACK SCHEDULE
@@ -48,7 +48,7 @@ def build_consumers_from_env(env, building_obs_names, key_path="security/keys/se
     return consumer_agents
 
 
-def build_aggregators(consumer_agents, key_path="security/keys/secret.key", debug=False):
+def build_aggregators(consumer_agents, metrics, key_path="security/keys/secret.key"):
     aggregators = []
     num_regions = max(1, (len(consumer_agents) + 4) // 5)
     print(f"Building {num_regions} aggregator regions...")
@@ -61,8 +61,11 @@ def build_aggregators(consumer_agents, key_path="security/keys/secret.key", debu
             region_id=region_id,
             consumers=consumer_agents[start:end],
             key_path=key_path,
-            debug=debug
+            debug=False
         )
+
+        # attach metrics to secure channel
+        agg.secure.metrics = metrics
         aggregators.append(agg)
 
     return aggregators
@@ -82,9 +85,6 @@ def run_training_and_simulation(
 
     print(f"Environment loaded: {len(env.buildings)} buildings")
 
-    consumer_agents = build_consumers_from_env(env, building_obs_names)
-    aggregator_agents = build_aggregators(consumer_agents)
-
     all_results = []
 
     # ======================================================
@@ -95,8 +95,11 @@ def run_training_and_simulation(
         observations = env.reset()
         obs_dict = {i: observations[i] for i in range(len(observations))}
 
-        metrics = NetworkMetrics()
+        metrics = SmartGridSecurityMetrics()
         ATTACK_INTENSITY = 0.6
+
+        consumer_agents = build_consumers_from_env(env, building_obs_names)
+        aggregator_agents = build_aggregators(consumer_agents, metrics)
 
         print(f"\n================== EPISODE {episode_idx + 1} ==================")
         print(f"[ATTACK ENABLED] {ATTACK_MODE.upper()}")
@@ -112,7 +115,7 @@ def run_training_and_simulation(
 
             consumer_states = {}
 
-            # ---------- Consumer Observation ----------
+            # -------- Consumer Observation --------
             for c in consumer_agents:
                 pkt = last_agg_packets[c.id]
                 agg_dec = (
@@ -128,7 +131,7 @@ def run_training_and_simulation(
 
             current_packets = {}
 
-            # ---------- Aggregator Sends Signals ----------
+            # -------- Aggregator Sends Signals --------
             for agg in aggregator_agents:
                 states = [consumer_states[c.id] for c in agg.consumers]
                 agg_state = agg.get_observation(states)
@@ -137,24 +140,14 @@ def run_training_and_simulation(
                 encrypted = agg.encrypt_signals_for_consumers(agg_action)
 
                 for cid, pkt in encrypted.items():
-                    metrics.record_send()
-                    send_time = time.time()
-
                     tampered = agg.secure.attacker_tamper(
                         pkt,
                         mode=ATTACK_MODE,
                         intensity=ATTACK_INTENSITY
                     )
+                    current_packets[cid] = tampered if tampered else b""
 
-                    if tampered:
-                        delay = time.time() - send_time
-                        current_packets[cid] = tampered
-                        metrics.record_receive(True, delay)
-                    else:
-                        current_packets[cid] = b""
-                        metrics.record_receive(False, 0.0)
-
-            # ---------- Consumer Actions ----------
+            # -------- Consumer Actions --------
             actions = []
             for c in consumer_agents:
                 dec = c.decrypt_agg_packet(current_packets[c.id])
@@ -166,40 +159,43 @@ def run_training_and_simulation(
                 action, _ = c.select_action(obs_new)
                 actions.append([float(np.atleast_1d(action)[0])])
 
-            next_obs, _, _, _ = env.step(actions)
+            next_obs, rewards, _, _ = env.step(actions)
             obs_dict = {i: next_obs[i] for i in range(len(next_obs))}
             last_agg_packets = current_packets
 
-        # ==================================================
-        #                 ENERGY METRICS
-        # ==================================================
-        net_load = np.array(env.net_electricity_consumption)
-        peak_load = float(np.max(net_load))
-        avg_load = float(np.mean(net_load))
-        par = peak_load / (avg_load + 1e-6)
+            for r in rewards:
+                metrics.record_reward(float(r))
 
-        security_metrics = metrics.results(par)
+        # ==================================================
+        #                 METRIC CALCULATION
+        # ==================================================
+        grid_metrics = SmartGridSecurityMetrics.grid_metrics(
+            env.net_electricity_consumption
+        )
+        security_metrics = metrics.security_metrics()
+        learning_metrics = metrics.learning_metrics()
 
         result_row = {
             "Episode": episode_idx + 1,
             "Attack": ATTACK_MODE,
-            **security_metrics
+            **grid_metrics,
+            **security_metrics,
+            **learning_metrics
         }
 
         all_results.append(result_row)
 
-        print("\n🔐 Security & Network Metrics")
+        print("\n📊 Episode Metrics")
         print(pd.DataFrame([result_row]).to_string(index=False))
 
     # ======================================================
     #                 SAVE RESULTS
     # ======================================================
     df = pd.DataFrame(all_results)
-    df.to_csv("security_attack_metrics.csv", index=False)
+    df.to_csv("final_attack_metrics.csv", index=False)
 
-    print("\n📊 FINAL RESULTS (ALL ATTACKS)")
-    print(df.to_string(index=False))
-    print("\n✅ Saved to security_attack_metrics.csv")
+    print("\n✅ ALL EXPERIMENTS COMPLETED")
+    print("📁 Results saved to final_attack_metrics.csv")
 
 # ==========================================================
 #                     MAIN ENTRY
