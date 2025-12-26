@@ -1,4 +1,4 @@
-<h1 align="center">MARL Smart Grid Pricing</h1>
+<h1 align="center">Secure MARL Smart Grid Pricing</h1>
 
 ## Overview
  
