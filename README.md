@@ -2,7 +2,7 @@
 
 ## Overview
  
-This project introduces a **Multi-Agent Reinforcement Learning (MARL)** framework for smart grid pricing, where **Consumers**, **Aggregators**, and a **Grid Controller** collaborate to optimize energy consumption using **hybrid price and incentive-based mechanisms**.  
+This project introduces a **Secure Multi-Agent Reinforcement Learning (MARL)** framework for smart grid pricing, where **Consumers**, **Aggregators**, and a **Grid Controller** collaborate to optimize energy consumption using **hybrid price and incentive-based mechanisms**.  
 
 ## Features
 - **Three-layer MARL architecture** with Consumer, Aggregator, and Grid agents.  
