@@ -81,7 +81,7 @@ class AggregatorAgentDDPG:
         self.optim_critic = None
 
         # Security Layer
-        self.secure = SecureChannel(key_path=key_path)
+        self.secure = SecureChannel(key_path=key_path, debug=False)
 
         # Track last state/action
         self.last_state = None

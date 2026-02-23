@@ -56,6 +56,7 @@ class ConsumerAgentDQN:
         metadata: dict,
         action_space,
         key_path: str = "security/keys/secret.key",
+        debug: bool = False,
         device: str = "cpu",
         replay_capacity: int = 50000,
         lr: float = 5e-4,
@@ -67,6 +68,7 @@ class ConsumerAgentDQN:
         self.id = building_id
         self.metadata = metadata or {}
         self.action_space = action_space
+        self.debug = bool(debug)
 
         # Agent meta
         self.building_type = self.metadata.get("building_type", "residential")
@@ -111,9 +113,9 @@ class ConsumerAgentDQN:
         # SecureChannel.encrypt_vector(packet) -> bytes (nonce + ciphertext)
         # SecureChannel.decrypt_vector(packet) -> np.array(dtype=float32)
         try:
-            self.secure = SecureChannel(key_path=key_path, verbose=True)
+            self.secure = SecureChannel(key_path=key_path, debug=False)
         except TypeError:
-            # Older secure_channel signatures may not accept verbose kwarg
+            # Fallback for alternate signatures.
             self.secure = SecureChannel(key_path=key_path)
         except Exception as e:
             print(f"[Consumer {self.id}] Warning: SecureChannel init failed: {e}. Continuing without secure channel.")
@@ -129,7 +131,8 @@ class ConsumerAgentDQN:
         self.target_net = QNetwork(input_dim, self.action_dim).to(self.device)
         self.target_net.load_state_dict(self.policy_net.state_dict())
         self.optimizer = optim.Adam(self.policy_net.parameters(), lr=self.lr)
-        print(f"[Consumer {self.id}] Built networks with input_dim={input_dim}, action_dim={self.action_dim}")
+        if self.debug:
+            print(f"[Consumer {self.id}] Built networks with input_dim={input_dim}, action_dim={self.action_dim}")
 
     # ---------------------------
     # decrypt helper
@@ -167,7 +170,8 @@ class ConsumerAgentDQN:
                     packet = bytes(agg_signal["nonce"]) + bytes(agg_signal["ciphertext"])
                     agg_signal = packet
                 except Exception:
-                    print(f"[Consumer {self.id}] Received dict agg_signal but failed to pack bytes -> safe zeros")
+                    if self.debug:
+                        print(f"[Consumer {self.id}] Received dict agg_signal but failed to pack bytes -> safe zeros")
                     return np.zeros(2, dtype=np.float32)
 
         # bytes-like packet — attempt decryption using secure channel if available
@@ -179,7 +183,8 @@ class ConsumerAgentDQN:
                     if raw.startswith(b"PLAINTEXT:"):
                         raw = raw.replace(b"PLAINTEXT:", b"")
                     vec = np.array(list(map(float, raw.decode().split(","))), dtype=np.float32)
-                    print(f"[Consumer {self.id}] Received PLAINTEXT packet -> {vec}")
+                    if self.debug:
+                        print(f"[Consumer {self.id}] Received PLAINTEXT packet -> {vec}")
                     return vec[:2] if vec.size >= 2 else np.pad(vec, (0, 2 - vec.size))
                 except Exception:
                     return np.zeros(2, dtype=np.float32)
@@ -187,7 +192,8 @@ class ConsumerAgentDQN:
             # use secure.decrypt_vector if available
             try:
                 vec = self.secure.decrypt_vector(bytes(agg_signal))
-                print(f"[Consumer {self.id}] Decrypted agg vector -> {vec}")
+                if self.debug:
+                    print(f"[Consumer {self.id}] Decrypted agg vector -> {vec}")
                 # Ensure shape (2,)
                 if vec.size >= 2:
                     return vec[:2].astype(np.float32)
@@ -196,11 +202,13 @@ class ConsumerAgentDQN:
                     out[: vec.size] = vec
                     return out
             except Exception as e:
-                print(f"[Consumer {self.id}] Decryption error: {e} — returning safe zeros")
+                if self.debug:
+                    print(f"[Consumer {self.id}] Decryption error: {e} - returning safe zeros")
                 return np.zeros(2, dtype=np.float32)
 
         # Unknown type
-        print(f"[Consumer {self.id}] Unknown agg_signal type ({type(agg_signal)}). Using zeros.")
+        if self.debug:
+            print(f"[Consumer {self.id}] Unknown agg_signal type ({type(agg_signal)}). Using zeros.")
         return np.zeros(2, dtype=np.float32)
 
     # ---------------------------

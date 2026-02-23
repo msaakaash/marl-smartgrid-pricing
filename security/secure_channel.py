@@ -22,6 +22,8 @@ class SecureChannel:
 
         self.aead = ChaCha20Poly1305(self.key)
         self.debug = debug
+        self.last_encrypt_info = None
+        self.last_decrypt_info = None
 
     # ============================================================
     #                  FORMATTERS (HEX + BINARY WRAPPED)
@@ -82,6 +84,13 @@ class SecureChannel:
             tag_only = ciphertext_full[-16:]  # auth tag
 
             packet = nonce + ciphertext_full
+            self.last_encrypt_info = {
+                "nonce_hex": nonce.hex(),
+                "ciphertext_hex": ct_only.hex(),
+                "tag_hex": tag_only.hex(),
+                "plaintext_vals": vec.astype(np.float32).tolist(),
+                "packet_len": len(packet),
+            }
 
             if self.debug:
                 print("\n================= ENCRYPT =================\n")
@@ -130,6 +139,14 @@ class SecureChannel:
 
             plaintext = self.aead.decrypt(nonce, ciphertext_full, None)
             arr = np.frombuffer(plaintext, dtype=np.float32)
+            self.last_decrypt_info = {
+                "auth_ok": True,
+                "nonce_hex": nonce.hex(),
+                "ciphertext_hex": ct_only.hex(),
+                "tag_hex": tag_only.hex(),
+                "plaintext_vals": arr.astype(np.float32).tolist(),
+                "packet_len": len(packet),
+            }
 
             if self.debug:
                 print("\n================= DECRYPT =================")
@@ -146,27 +163,34 @@ class SecureChannel:
                 # PT
                 self._print_table("PLAINTEXT (PT)", "PT", plaintext)
                 print(f"Recovered PT values: {arr.tolist()}")
-                print("Auth: VALID ✓")
+                print("Auth: VALID")
                 print("===========================================\n")
 
             return arr
 
         except Exception as e:
+            nonce = packet[:12] if len(packet) >= 12 else b""
+            ciphertext_full = packet[12:] if len(packet) > 12 else b""
+            ct_only = ciphertext_full[:-16] if len(ciphertext_full) >= 16 else ciphertext_full
+            tag_only = ciphertext_full[-16:] if len(ciphertext_full) >= 16 else b""
+            self.last_decrypt_info = {
+                "auth_ok": False,
+                "nonce_hex": nonce.hex(),
+                "ciphertext_hex": ct_only.hex(),
+                "tag_hex": tag_only.hex(),
+                "plaintext_vals": [0.0, 0.0],
+                "packet_len": len(packet),
+            }
             if self.debug:
                 print("\n================= DECRYPT FAILED =================")
-
-                nonce = packet[:12] if len(packet) >= 12 else b""
-                ciphertext_full = packet[12:] if len(packet) > 12 else b""
-
-                ct_only = ciphertext_full[:-16] if len(ciphertext_full) >= 16 else ciphertext_full
-                tag_only = ciphertext_full[-16:] if len(ciphertext_full) >= 16 else b""
 
                 self._print_table("NONCE", "NONCE", nonce)
                 self._print_table("CIPHERTEXT", "CT", ct_only)
                 self._print_table("AUTH TAG", "TAG", tag_only)
 
-                print("Auth: FAILED ✗ (tampered or corrupted!)")
+                print("Auth: FAILED (tampered or corrupted!)")
                 print("Returning SAFE PT: [0.0, 0.0]")
                 print("====================================================\n")
 
             return np.array([0.0, 0.0], dtype=np.float32)
+

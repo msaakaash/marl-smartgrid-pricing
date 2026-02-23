@@ -1,0 +1,6 @@
+Episode,Attack,Peak Load,Average Load,Load Variance,PAR,Packet Delivery Ratio,Auth Failure Rate,Mean Reward,Reward Variance
+1,sybil,22.306,2.191,38.712,10.18,100.0,0.0,-1.056,2.015
+2,false_data_injection,26.003,2.194,39.206,11.854,100.0,0.0,-1.06,2.018
+3,bit_flip,25.703,2.189,39.008,11.744,100.0,0.0,-1.053,2.003
+4,ddos,23.129,2.188,38.731,10.573,100.0,0.0,-1.053,1.993
+5,replay,23.408,2.191,39.262,10.682,100.0,0.0,-1.058,2.009
