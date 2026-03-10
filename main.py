@@ -44,13 +44,16 @@ from security.attacks import AttackSimulator
 # ==========================================================
 #                     ATTACK SCHEDULE
 # ==========================================================
-ATTACK_SCHEDULE = [
+BASE_ATTACK_SCHEDULE = [
     "sybil",
     "false_data_injection",
     "bit_flip",
     "ddos",
     "replay",
 ]
+
+NUM_EPISODES = 30
+ATTACK_SCHEDULE = [BASE_ATTACK_SCHEDULE[i % len(BASE_ATTACK_SCHEDULE)] for i in range(NUM_EPISODES)]
 
 
 def save_final_security_plot(df: pd.DataFrame, output_path: str = "results/final_security_metrics.png"):
@@ -363,3 +366,4 @@ if __name__ == "__main__":
     torch.manual_seed(0)
 
     run_training_and_simulation()
+
